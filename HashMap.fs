@@ -38,9 +38,9 @@ type Buffer<'K,'V when 'K :comparison>() =
         | x ->
             rental.[index] <- x - 1
 
-type BufferFactory() =
-    let buffers = Dictionary<System.Type,obj>()
-    member __.GetBuffer<'K,'V when 'K : comparison>() =
+module BufferFactory =
+    let private buffers = Dictionary<System.Type,obj>()
+    let GetBuffer<'K,'V when 'K : comparison>() =
         let t = typeof<'K * 'V>
         match buffers.TryGetValue t with
         | true, v -> v :?> Buffer<'K,'V> 
@@ -49,26 +49,19 @@ type BufferFactory() =
             buffers.Add(t, newBuf)
             newBuf
 
-type ShardMap<'K,'V  when 'K :> IEqualityComparer<'K> and 'K : comparison>(bf: BufferFactory) =
+type ShardMap<'K,'V  when 'K :> IEqualityComparer<'K> and 'K : comparison>() =
     
-    let buffer =  bf.GetBuffer<'K,'V>()
+    let buffer =  BufferFactory.GetBuffer<'K,'V>()
     let hashAry = ResizeArray<Map<'K,'V> []>(0)
     
     let mutable count = 0 
 
-    let bucketSize itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2)))
-    let last 
-    let bitMask (keyHash:int) (arySize) = ( (keyHash <<< (32 - arySize)) <<< (35 - arySize) , keyHash &&& 0b111 )
+    let bucketSize itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2))) 
+    let bitMask (keyHash:int) (arySize) = struct ((keyHash <<< (32 - arySize)) <<< (35 - arySize) , keyHash &&& 0b111 )
 
-
+    member __.Add(k:'K,v:'V) =
         if count + 1 < (hashAry.Count * 8) then 
             // base array needs resizing
-
-        else 
-
-
-        let kvp = KeyValueNode(k,v)
-        let hash = k.GetHashCode()
-        let bucket = hash % (hashAry.Count)
-        if hash < lbound && hashAry.Count then
-        ()
+            ()
+        else
+            ()
