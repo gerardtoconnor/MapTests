@@ -72,6 +72,12 @@ module Buffer8Factory =
             buffers.Add(t, newBuf)
             newBuf
 
+// Helper Functions
+////////////////////////////
+
+
+let private calcBitMaskDepth itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2)))
+let inline private pow2 (i:int) = 2 <<< (i - 1)
 let inline private isEmpty v = Object.ReferenceEquals(null,v)
 
 type ShardMap<'K,'V  when 'K :> IEqualityComparer<'K> and 'K : comparison>(nRIndex:int [],nBucket: Map<'K,'V> [] []) =
@@ -91,7 +97,7 @@ type ShardMap<'K,'V  when 'K :> IEqualityComparer<'K> and 'K : comparison>(nRInd
 
     let mutable count = 0 
 
-    let calcBitMaskDepth itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2)))
+    //let calcBitMaskDepth itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2)))
 
     let mutable bitMaskDepth = 0
     
@@ -196,12 +202,17 @@ type ShardMap<'K,'V  when 'K :> IEqualityComparer<'K> and 'K : comparison>(nRInd
         else
             item key
 
-    new(kvps:'K * 'V seq) =
+    new(kvps:('K * 'V) seq) =
         let mutable counter = 0
-        let items = []
+        let mutable items = []
         for kvp in kvps do
             counter <- counter + 1
             items <- kvp :: items
+        let bd = calcBitMaskDepth counter
+        let bucketSize = pow2 bd
+        
+        
+        ShardMap<'K,'V>()
         
 
 
@@ -214,3 +225,5 @@ bitMask 9103477 6
 let ma = Array.zeroCreate<Map<string,int>>(3)
 ma.[1] <- Map.empty
 if Object.ReferenceEquals(null,ma.[1]) then None else Some ma.[1]
+2 <<< 5
+47
