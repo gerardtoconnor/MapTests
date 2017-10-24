@@ -78,12 +78,18 @@ module Buffer8Factory =
 
 let private calcBitMaskDepth itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2)))
 let inline private pow2 (i:int) = 2 <<< (i - 1)
+
+///prvides index in bucket of shard
+let inline private bucketIndex (keyHash:int,bitdepth:int) = (keyHash &&& (~~~(-1 <<< (bitdepth)))) >>> 3// todo: improve substring bitmask calc
+
+///provides sub index in shards
+let inline private shardIndex (keyHash:int) = keyHash &&& 0b111
 let inline private isEmpty v = Object.ReferenceEquals(null,v)
 
-type ShardMap<'K,'V  when 'K :> IEqualityComparer<'K> and 'K : comparison>(nRIndex:int [],nBucket: Map<'K,'V> [] []) =
+type ShardMap<'K,'V  when 'K :> IEqualityComparer<'K> and 'K : comparison>(buffer:Buffer8<Map<'K,'V>>,nRIndex:int [],nBucket: Map<'K,'V> [] []) =
     
     let [<Literal>] InitialSize = 2 // 2 * 8 = 16 
-    let buffer = Buffer8Factory.GetBuffer8<Map<'K,'V>>()
+    //let buffer = Buffer8Factory.GetBuffer8<Map<'K,'V>>()
     let mutable rindex = nRIndex //Array.zeroCreate<int> InitialSize
     let mutable bucket = nBucket 
         // Array.init InitialSize (fun i -> 
@@ -104,10 +110,7 @@ type ShardMap<'K,'V  when 'K :> IEqualityComparer<'K> and 'K : comparison>(nRInd
     let calcpBitMask (bitDepth:int) = ~~~(-1 <<< (bitDepth))
     let mutable pBitMask = calcpBitMask bitMaskDepth
     ///provides index in local bucket of shard
-    let bucketIndex (keyHash:int,bitdepth:int) = (keyHash &&& (~~~(-1 <<< (bitdepth)))) >>> 3// todo: improve substring bitmask calc
-    
-    ///provides sub index in shards
-    let shardIndex (keyHash:int) = keyHash &&& 0b111
+
 
     let higherRange (index:int,bitdepth:int) = (index ||| 1 <<< bitdepth) >>> 3  
 
@@ -193,9 +196,8 @@ type ShardMap<'K,'V  when 'K :> IEqualityComparer<'K> and 'K : comparison>(nRInd
         let nBucket = Array.zeroCreate<Map<'K,'V>[]>(nBucket.Length)
         Array.Copy(bucket,nBucket,bucket.Length)
 
-        ShardMap<'K,'V>(nRIndex,nBucket)
+        ShardMap<'K,'V>(buffer,nRIndex,nBucket)
                 
-
     member __.Item(key:'K) =
         if resizing then
             lock resizeLock (fun () -> item key)
@@ -203,16 +205,41 @@ type ShardMap<'K,'V  when 'K :> IEqualityComparer<'K> and 'K : comparison>(nRInd
             item key
 
     new(kvps:('K * 'V) seq) =
+
+        let buffer = Buffer8Factory.GetBuffer8<Map<'K,'V>>() //duplication can constructor not access internal fields!? should this be provided in main ctor
         let mutable counter = 0
         let mutable items = []
         for kvp in kvps do
             counter <- counter + 1
             items <- kvp :: items
-        let bd = calcBitMaskDepth counter
-        let bucketSize = pow2 bd
+        let bitdepth = calcBitMaskDepth counter
+        let bucketSize = pow2 bitdepth
+        let newBucket = Array.zeroCreate<Map<'K,'V> []>(bucketSize)
+        let newRIndex = Array.create bucketSize -1 // set and empty state for every bucket without pulling in empty arrays yet
         
+        items
+        |> List.iter (fun (k,v) -> 
+                let kh = k.GetHashCode()
+                let bi = bucketIndex(kh,bitdepth)
+                let shrd =
+                    if newRIndex.[bi] = -1 then
+                        buffer.Rent(bi,newRIndex,newBucket)
+                    else
+                        newBucket.[bi]
+                let si = shardIndex(kh)
+                let m = shrd.[si]
+                shrd.[si] <- 
+                    if isEmpty m then
+                        Map<'K,'V>([(k,v)])
+                    else
+                        m.Add(k,v)                
+            )
+        //now allocate any empties that were not filled
+        for bi in 0.. bucketSize - 1 do
+            if newRIndex.[bi] = -1 then
+                newBucket.[bi] <- buffer.Empty() |> snd
         
-        ShardMap<'K,'V>()
+        ShardMap<'K,'V>(buffer,newRIndex,newBucket)
         
 
 
