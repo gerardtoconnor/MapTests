@@ -61,6 +61,11 @@ type Buffer8<'T>() =
     member __.Exclusive(index:int) =
         rental.[index] = 1
 
+    member __.IncrRentals(rary:int []) =
+        rary |> Array.iter (fun ri ->
+            rental.[ri] <- rental.[ri] + 1 
+        )
+
 module Buffer8Factory =
     let private buffers = Dictionary<System.Type,obj>()
     let GetBuffer8<'T>() =
@@ -86,7 +91,7 @@ let inline private bucketIndex (keyHash:int,bitdepth:int) = (keyHash &&& (~~~(-1
 let inline private shardIndex (keyHash:int) = keyHash &&& 0b111
 let inline private isEmpty v = Object.ReferenceEquals(null,v)
 
-type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(buffer:Buffer8<Map<'K,'V>>,nRIndex:int [],nBucket: Map<'K,'V> [] []) =
+type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(buffer:Buffer8<Map<'K,'V>>,icount:int, nRIndex:int [],nBucket: Map<'K,'V> [] []) =
     
     let [<Literal>] InitialSize = 2 // 2 * 8 = 16 
     //let buffer = Buffer8Factory.GetBuffer8<Map<'K,'V>>()
@@ -101,11 +106,11 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(buffer:Buffer8<Map<
     let mutable resizing = false
     let resizeLock = obj
 
-    let mutable count = 0 
+    let mutable count = icount 
 
     //let calcBitMaskDepth itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2)))
 
-    let mutable bitMaskDepth = 0
+    let mutable bitMaskDepth = calcBitMaskDepth icount
     
     let calcpBitMask (bitDepth:int) = ~~~(-1 <<< (bitDepth))
     let mutable pBitMask = calcpBitMask bitMaskDepth
@@ -116,7 +121,10 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(buffer:Buffer8<Map<
 
     let item (key:'K) =
         let kh = key.GetHashCode()
-        let m = bucket.[bucketIndex(kh,bucket.Length)].[shardIndex kh]
+        let bi = bucketIndex(kh,bitMaskDepth)
+        let si = shardIndex kh
+        let m = bucket.[bi].[si]
+        //printfn "?| looking for key:'%A' [%i][%i] in map{%A}" key bi si m
         if isEmpty m then
             raise <| KeyNotFoundException(sprintf "Key:%A , does not exist in the dictionary" key)
         else
@@ -175,7 +183,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(buffer:Buffer8<Map<
         
         /// Resize complete at this stage if needed
         let kh = k.GetHashCode()
-        let bi = bucketIndex(kh,bucket.Length)
+        let bi = bucketIndex(kh,bitMaskDepth)
         let si = shardIndex kh
         let shrd =
             if buffer.Exclusive(rindex.[bi]) then
@@ -195,13 +203,29 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(buffer:Buffer8<Map<
         let nBucket = Array.zeroCreate<Map<'K,'V>[]>(nBucket.Length)
         Array.Copy(bucket,nBucket,bucket.Length)
 
-        ShardMap<'K,'V>(buffer,nRIndex,nBucket)
+        buffer.IncrRentals(rindex)
+
+        ShardMap<'K,'V>(buffer,count,nRIndex,nBucket)
                 
     member __.Item(key:'K) =
         if resizing then
             lock resizeLock (fun () -> item key)
         else
             item key
+
+    member __.ContainsKey(key:'K) =
+        let kh = key.GetHashCode()
+        let m = bucket.[bucketIndex(kh,bitMaskDepth)].[shardIndex kh]
+        //printfn "?| looking for key:'%A' [%i][%i] in map{%A}" key bi si m
+        if isEmpty m then
+            false
+        else
+            m.ContainsKey key               
+
+    interface IDisposable with
+        member __.Dispose() =
+            for i in 0 .. bucket.Length - 1 do
+                buffer.Return(rindex.[i],bucket.[i])
 
     new(kvps:('K * 'V) seq) =
 
@@ -231,8 +255,10 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(buffer:Buffer8<Map<
                 let m = shrd.[si]
                 shrd.[si] <- 
                     if isEmpty m then
+                        //printfn "$| creating new map for key:'%A' [%i][%i] for value:%A" k bi si v
                         Map<'K,'V>([(k,v)])
                     else
+                        //printfn "+| adding key:'%A' [%i][%i] for value:%A to map {%A}" k bi si v m
                         m.Add(k,v)                
             )
         //now allocate any empties that were not filled
@@ -240,7 +266,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(buffer:Buffer8<Map<
             if newRIndex.[bi] = -1 then
                 newBucket.[bi] <- buffer.Empty() |> snd
         
-        ShardMap<'K,'V>(buffer,newRIndex,newBucket)
+        ShardMap<'K,'V>(buffer,counter,newRIndex,newBucket)
         
 
 
@@ -315,10 +341,55 @@ let testSeq = [
 ]
 
 let smap = ShardMap<_,_>(testSeq)
-let dict = Dictionary<_,_>()
+let dict = Dictionary<string,string>()
 
-for (k,_) in testSeq do
-    try 
-        printfn "SUCCESS: %s >> %A" k smap.[k]
-    with
-    | e -> printfn "ERROR: %s >> %A" k e
+let bmap = Map<_,_>(numberStrings)
+
+let smap = ShardMap<_,_>(numberStrings)
+
+for (k,v) in numberStrings do
+    dict.Add(k,v)
+
+for (k,v) in numberStrings do
+    dict.Add(k,v)
+
+for i in 0 .. 1000 do
+    for (k,v) in numberStrings do
+        try 
+            if smap.[k] <> v then
+                 printfn "ERROR ON KEY MATCH: %A" k
+        with
+        | e -> printfn "ERROR: %s >> %A" k e
+
+for i in 0 .. 1000 do
+    for (k,v) in numberStrings do
+        try 
+            if dict.[k] <> v then
+                printfn "ERROR ON KEY MATCH: %A" k
+        with
+        | e -> printfn "ERROR: %s >> %A" k e
+
+for i in 0 .. 1000 do
+    for (k,v) in numberStrings do
+        try 
+            if bmap.[k] <> v then
+                printfn "ERROR ON KEY MATCH: %A" k
+        with
+        | e -> printfn "ERROR: %s >> %A" k e
+
+for i in 0 .. 1000 do
+    let ndict = Dictionary<_,_>(dict)
+    let k,v = "Key1","Value1" 
+    ndict.Add(k,v)
+    if not(ndict.ContainsKey(k)) || dict.ContainsKey(k) then failwith "Immutablity Error"
+
+for i in 0 .. 1000 do
+    let ndict = smap.Copy()
+    let k,v = "Key1","Value1" 
+    ndict.Add(k,v)
+    if not(ndict.ContainsKey(k)) then failwith "new dict does not contain added value"
+    if smap.ContainsKey(k) then failwith "old dict has newly added value"
+
+smap.["Elekta"];;
+
+#time
