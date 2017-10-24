@@ -86,7 +86,7 @@ let inline private bucketIndex (keyHash:int,bitdepth:int) = (keyHash &&& (~~~(-1
 let inline private shardIndex (keyHash:int) = keyHash &&& 0b111
 let inline private isEmpty v = Object.ReferenceEquals(null,v)
 
-type ShardMap<'K,'V  when 'K :> IEqualityComparer<'K> and 'K : comparison>(buffer:Buffer8<Map<'K,'V>>,nRIndex:int [],nBucket: Map<'K,'V> [] []) =
+type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(buffer:Buffer8<Map<'K,'V>>,nRIndex:int [],nBucket: Map<'K,'V> [] []) =
     
     let [<Literal>] InitialSize = 2 // 2 * 8 = 16 
     //let buffer = Buffer8Factory.GetBuffer8<Map<'K,'V>>()
@@ -130,9 +130,8 @@ type ShardMap<'K,'V  when 'K :> IEqualityComparer<'K> and 'K : comparison>(buffe
 
                 let isize = bucket.Length
                 let ibmd = calcBitMaskDepth isize
-                let nbmd = ibmd + 1
                 let newBucket = Array.zeroCreate<Map<'K,'V> []> (isize * 2)
-                let newRIndex = Array.zeroCreate<int> (isize * 2)
+                let newRIndex = Array.zeroCreate<int> (isize * 2) // <<< todo: change to create -1s so rindex can be checked processing and at end
                 for i in 0 .. isize - 1 do
                     let shrd = bucket.[i]
                     let i2 = (i ||| 1 <<< ibmd) >>> 3 
@@ -209,9 +208,11 @@ type ShardMap<'K,'V  when 'K :> IEqualityComparer<'K> and 'K : comparison>(buffe
         let buffer = Buffer8Factory.GetBuffer8<Map<'K,'V>>() //duplication can constructor not access internal fields!? should this be provided in main ctor
         let mutable counter = 0
         let mutable items = []
-        for kvp in kvps do
+        kvps |> Seq.iter (fun kvp -> 
             counter <- counter + 1
             items <- kvp :: items
+        )
+        
         let bitdepth = calcBitMaskDepth counter
         let bucketSize = pow2 bitdepth
         let newBucket = Array.zeroCreate<Map<'K,'V> []>(bucketSize)
@@ -254,3 +255,70 @@ ma.[1] <- Map.empty
 if Object.ReferenceEquals(null,ma.[1]) then None else Some ma.[1]
 2 <<< 5
 47
+
+let testSeq = [
+    ("Cooper Energy","Oil & Gas");
+    ("Asetek","Hardware");
+    ("Shire","Healthcare");
+    ("AB InBev","Food & Beverage");
+    ("Vodafone","Mobile Telecommunications");
+    ("Akzo Nobel","Chemicals");
+    ("Bayer","Healthcare");
+    ("Liberty Global C Class","Media");
+    ("Tele Columbus","Media");
+    ("Ryanair","Travel/Leisure");
+    ("SAP","Software");
+    ("Vivendi","Media");
+    ("Leonardo","Aerospace/Defense");
+    ("Telecom Italia","Fixed-Line Telecommunications");
+    ("UniCredit","Banking");
+    ("Aker BP","Oil & Gas");
+    ("Volvo","Industrial Machinery");
+    ("Alstom","Diversified Manufacturing");
+    ("LafargeHolcim","Building Materials");
+    ("Danone","Food & Beverage");
+    ("ASML Holdings","Semiconductors");
+    ("IMCD","Chemicals");
+    ("Reckitt Benckiser","Cosmetics & Toiletries");
+    ("Fresenius Medical Care","Healthcare");
+    ("Deutsche Telekom","Fixed-Line Telecommunications");
+    ("Nokia","Telecommunications Equipment");
+    ("Royal Dutch Shell","Oil & Gas");
+    ("AIB","Banking");
+    ("Whitbread","Travel/Leisure");
+    ("Renault","Automotive");
+    ("Daimler","Automotive");
+    ("Barclays","Banking");
+    ("Brenntag","Chemicals");
+    ("Glenveagh","Construction");
+    ("LiLAC C Class","Media");
+    ("Awilco LNG","Transport");
+    ("Zeta Petroleum","Oil & Gas");
+    ("OMV","Oil & Gas");
+    ("Kuehne & Nagel","Transport");
+    ("Statoilhydro","Oil & Gas");
+    ("Sandvik AB","Industrial Machinery");
+    ("Airbus","Aerospace/Defense");
+    ("Merck","Chemicals");
+    ("Wartsila","Industrial Machinery");
+    ("Securitas","Business Services");
+    ("Dassault Systemes","Software");
+    ("Colruyt","General Retail");
+    ("Just Eat","Internet");
+    ("Kone","Construction");
+    ("Swisscom","Fixed-Line Telecommunications");
+    ("Solvay","Chemicals");
+    ("EDF","Utilities");
+    ("Electrolux","Consumer Durables");
+    ("SKF","Industrial Machinery");
+    ("Elekta","Healthcare");
+]
+
+let smap = ShardMap<_,_>(testSeq)
+let dict = Dictionary<_,_>()
+
+for (k,_) in testSeq do
+    try 
+        printfn "SUCCESS: %s >> %A" k smap.[k]
+    with
+    | e -> printfn "ERROR: %s >> %A" k e
