@@ -62,8 +62,8 @@ type Buffer8<'T>() =
         rental.[index] = 1
 
     member __.IncrRentals(rary:int []) =
-        rary |> Array.iter (fun ri ->
-            rental.[ri] <- rental.[ri] + 1 
+        rary |> Array.Parallel.iter (fun ri ->
+            if ri > 0 then rental.[ri] <- rental.[ri] + 1 
         )
 
 module Buffer8Factory =
@@ -343,17 +343,21 @@ let testSeq = [
 let smap = ShardMap<_,_>(testSeq)
 let dict = Dictionary<string,string>()
 
-let bmap = Map<_,_>(numberStrings)
-
-let smap = ShardMap<_,_>(numberStrings)
-
-for (k,v) in numberStrings do
-    dict.Add(k,v)
-
-for (k,v) in numberStrings do
-    dict.Add(k,v)
+for i in 0 .. 1000 do
+    let bmap = Map<_,_>(numberStrings)
+    ()
 
 for i in 0 .. 1000 do
+    let smap = new ShardMap<_,_>(numberStrings)
+    ()
+
+for (k,v) in numberStrings do
+    dict.Add(k,v)
+
+for (k,v) in numberStrings do
+    dict.Add(k,v)
+
+for i in 0 .. 100000 do
     for (k,v) in numberStrings do
         try 
             if smap.[k] <> v then
@@ -361,7 +365,7 @@ for i in 0 .. 1000 do
         with
         | e -> printfn "ERROR: %s >> %A" k e
 
-for i in 0 .. 1000 do
+for i in 0 .. 100000 do
     for (k,v) in numberStrings do
         try 
             if dict.[k] <> v then
@@ -369,7 +373,7 @@ for i in 0 .. 1000 do
         with
         | e -> printfn "ERROR: %s >> %A" k e
 
-for i in 0 .. 1000 do
+for i in 0 .. 100000 do
     for (k,v) in numberStrings do
         try 
             if bmap.[k] <> v then
@@ -383,6 +387,7 @@ for i in 0 .. 1000 do
     ndict.Add(k,v)
     if not(ndict.ContainsKey(k)) || dict.ContainsKey(k) then failwith "Immutablity Error"
 
+
 for i in 0 .. 1000 do
     let ndict = smap.Copy()
     let k,v = "Key1","Value1" 
@@ -390,6 +395,16 @@ for i in 0 .. 1000 do
     if not(ndict.ContainsKey(k)) then failwith "new dict does not contain added value"
     if smap.ContainsKey(k) then failwith "old dict has newly added value"
 
+for i in 0 .. 1000 do
+    let ndict = 
+    let k,v = "Key1","Value1" 
+    ndict.Add(k,v)
+    if not(ndict.ContainsKey(k)) then failwith "new dict does not contain added value"
+    if smap.ContainsKey(k) then failwith "old dict has newly added value"
+
+dict.Count   
+
 smap.["Elekta"];;
+
 
 #time
