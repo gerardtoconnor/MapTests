@@ -33,8 +33,8 @@ type ShardMapIterator<'K,'V when 'K : comparison>(bucket:Map<'K,'V> [] []) =
     let mutable si = 0
     let mutable started = false
     let rec nextMap () =
-        if si + 1 < ShardSize then
-            si <- si + 1
+
+        let testMap () = 
             let m = bucket.[bi].[si]
             if isEmpty m then 
                 nextMap ()
@@ -43,20 +43,16 @@ type ShardMapIterator<'K,'V when 'K : comparison>(bucket:Map<'K,'V> [] []) =
                 if mapEnum.MoveNext() then
                     true
                 else
-                    nextMap ()            
+                    nextMap ()    
+
+        if si + 1 < ShardSize then
+            si <- si + 1
+            testMap ()           
         else
             if bi + 1 < bucket.Length then
                 bi <- bi + 1
                 si <- 0
-                let m = bucket.[bi].[si]
-                if isEmpty m then 
-                    nextMap ()
-                else
-                    mapEnum <- (m :> IEnumerable<_>).GetEnumerator()
-                    if mapEnum.MoveNext() then
-                        true
-                    else
-                        nextMap () 
+                testMap ()
             else
                 false
 
