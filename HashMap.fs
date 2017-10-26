@@ -10,8 +10,8 @@ let private ShardSize = 16
 // Helper Functions
 ////////////////////////////
 
-let private calcBitMaskDepth itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2)))
-let inline private pow2 (i:int) = 2 <<< (i - 1)
+let calcBitMaskDepth itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2))) //todo:make private
+let inline private pow2 (i:int) = 2 <<< (i - 5) // todo 4 is shard size 2^n
 
 let inline calcSubBitMask (bitDepth:int) = ~~~(-1 <<< (bitDepth))
 
@@ -32,13 +32,19 @@ type ShardMapIterator<'K,'V when 'K : comparison>(bucket:Map<'K,'V> [] []) =
     let mutable bi = 0
     let mutable si = 0
     let mutable started = false
+    
+    let mutable skipped = 0
+    let mutable found = 0
+    
     let rec nextMap () =
 
         let testMap () = 
             let m = bucket.[bi].[si]
-            if isEmpty m then 
+            if isEmpty m then
+                skipped <- skipped + 1 
                 nextMap ()
             else
+                found <- found + 1
                 mapEnum <- (m :> IEnumerable<_>).GetEnumerator()
                 if mapEnum.MoveNext() then
                     true
@@ -54,6 +60,7 @@ type ShardMapIterator<'K,'V when 'K : comparison>(bucket:Map<'K,'V> [] []) =
                 si <- 0
                 testMap ()
             else
+                //printfn "itterator disposed with %i found and %i skipped" found skipped
                 false
 
     member __.Current = mapEnum.Current
@@ -66,9 +73,11 @@ type ShardMapIterator<'K,'V when 'K : comparison>(bucket:Map<'K,'V> [] []) =
         else
             started <- true
             let m = bucket.[0].[0]
-            if isEmpty m then 
+            if isEmpty m then
+                skipped <- skipped + 1 
                 nextMap ()
             else
+                found <- found + 1
                 mapEnum <- (m :> IEnumerable<_>).GetEnumerator()
                 if mapEnum.MoveNext() then
                     true
@@ -79,7 +88,7 @@ type ShardMapIterator<'K,'V when 'K : comparison>(bucket:Map<'K,'V> [] []) =
         si <- 0
         started <- false
 
-    member self.Dispose() = ()
+    member __.Dispose() = ()
 
 
 
@@ -257,6 +266,21 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
 
     member __.Count with get () = count
 
+    member __.BucketSize with get () = bucket.Length
+
+    member __.PrintLayout () =
+        printfn "Printing Layout:"
+        for i in 0 .. bucket.Length - 1 do
+            printf "%3i {" i
+            for j in 0 .. ShardSize - 1 do
+                let m = bucket.[i].[j]
+                if isEmpty m then
+                    printf " __ |"
+                else
+                    printf " %2i |" m.Count
+            printfn "}"
+
+
     interface IEnumerable<KeyValuePair<'K, 'V>> with
         member s.GetEnumerator() = s.toSeq ()
 
@@ -314,6 +338,13 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
 
 let smap = new ShardMap<_,_>(numberStrings)
 let bmap = Map<_,_>(numberStrings)
+
+smap.BucketSize
+smap.Count
+smap.PrintLayout()
+calcBitMaskDepth smap.Count
+
+2 <<< (11-5)
 
 let dict = Dictionary<string,string>()
 for (k,v) in numberStrings do
