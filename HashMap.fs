@@ -368,18 +368,15 @@ for i in 0 .. lookuploops do
 
 for i in 0 .. lookuploops do
     for (k,v) in numberStrings do
-        try 
-            if dict.[k] <> v then
-                printfn "ERROR ON KEY MATCH: %A" k
-        with
-        | e -> printfn "ERROR: %s >> %A" k e
+        if dict.[k] <> v then
+            printfn "ERROR ON KEY MATCH: %A" k
 
 for i in 0 .. lookuploops do
     for (k,v) in numberStrings do
         if bmap.[k] <> v then printfn "ERROR ON KEY MATCH: %A" k
         
 ////////////
-let copyloops = 1000000
+let copyloops = 100000
 for i in 0 .. copyloops do
     let ndict = Dictionary<_,_>(dict)
     let k,v = "Key1","Value1" 
@@ -394,11 +391,11 @@ for i in 0 .. copyloops do
     if not(ndict.ContainsKey(k)) then failwith "new dict does not contain added value"
     if smap.ContainsKey(k) then failwith "old dict has newly added value"
 
-for i in 0 .. copyloops do
-    let k,v = "Key1","Value1" 
-    smap.Add(k,v)
-    //ndict.Add(k,v)
-    if not(smap.ContainsKey(k)) then failwith "failed to addadded value"
+// for i in 0 .. copyloops do
+//     let k,v = "Key1","Value1" 
+//     smap.Add(k,v)
+//     //ndict.Add(k,v)
+//     if not(smap.ContainsKey(k)) then failwith "failed to addadded value"
 
 for i in 0 .. copyloops do
     let k,v = "Key1","Value1"
@@ -418,7 +415,6 @@ for i in 0 .. ittrLoops do
         //counter <- counter + 1
         ()
     )
-printfn "counter: %i" counter
 
 for i in 0 .. ittrLoops do
     bmap |> Seq.iter (fun kvp -> 
@@ -427,7 +423,24 @@ for i in 0 .. ittrLoops do
         //counter <- counter + 1
         ()
     ) 
-printfn "counter: %i" counter
+
+for i in 0 .. ittrLoops do
+    dict |> Seq.iter (fun kvp -> 
+        let k = kvp.Key
+        let v = kvp.Value
+        //counter <- counter + 1
+        ()
+    )
+
+let ls = numberStrings |> Array.map (fun (k,v) -> KeyValuePair<_,_>(k,v) ) |> Array.toList
+for i in 0 .. ittrLoops do
+    ls |> Seq.iter (fun kvp -> 
+        let k = kvp.Key
+        let v = kvp.Value
+        //counter <- counter + 1
+        ()
+    )
+
 
 
 let bmap = bmap.Remove("Key1")
