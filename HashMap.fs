@@ -288,25 +288,31 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
 
     member __.PrintLayout () =
         let mutable rowCount = 0
+        let mutable tmapCount = 0
+        let mutable rmapCount = 0
         let columnCount = Array.zeroCreate<int>(bucket.Length)
         printfn "Printing Layout:"
         for i in 0 .. bucket.Length - 1 do
             rowCount <- 0
+            rmapCount <- 0
+
             printf "%3i {" i
             for j in 0 .. ShardSize - 1 do
                 let m = bucket.[i].[j]
                 if isEmpty m then
                     printf " __ |"
                 else
+                    tmapCount <- tmapCount + 1
+                    rmapCount <- rmapCount + 1
                     columnCount.[i] <- columnCount.[i] + m.Count
                     rowCount <- rowCount + m.Count
                     printf " %2i |" m.Count
-            printfn "} = %4i" rowCount
+            printfn "} = %4i[%5i]"rmapCount rowCount
         
         printf "Tot {" 
         for j in 0 .. ShardSize - 1 do
             printf " %i |" columnCount.[j]
-        printfn "} = %4i" count            
+        printfn "} = %4i[%5i]" tmapCount count            
     
     member __.SubMapList () =
         let rec go (sm:SubMap<_,_>) acc =
@@ -381,7 +387,9 @@ let bmap = Map<_,_>(numberStrings)
 smap.BucketSize
 smap.Count
 smap.PrintLayout()
+let sml = smap.SubMapList()
 calcBitMaskDepth smap.Count
+List.length sml
 
 2 <<< (11-5)
 
@@ -480,8 +488,11 @@ for i in 0 .. ittrLoops do
         //counter <- counter + 1
         ()
     )
+Seq.length smap
 
-
+smap |> Seq.iter (fun kvp ->
+    printfn "'%A':'%A'" kvp.Key kvp.Value
+)
 
 let bmap = bmap.Remove("Key1")
 

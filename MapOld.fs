@@ -363,9 +363,13 @@ module MapTree =
            /// true when Movetail has been called   
         let mutable started = false
 
-        let notStarted() = raise (new System.InvalidOperationException("Enumeration has not started. Call Movetail."))
+        let notStarted() = raise (new System.InvalidOperationException("Enumeration has not started. Call MoveNext."))
         let alreadyFinished() = raise (new System.InvalidOperationException("Enumeration already finished."))
 
+        //Added for debug -----
+        do
+            printfn "MapIterator Created from Map[%i]" (count s)
+        //--------------------
         member i.Current =
             if started then
                 match stack with
@@ -390,9 +394,9 @@ module MapTree =
                   stack <- collapseLHS rest;
                   not stack.IsEmpty
               | [] -> false
-              | _ -> failwith "Please report error: Map iterator, unexpected stack for movetail"
+              | _ -> failwith "Please report error: Map iterator, unexpected stack for movenext"
           else
-              // The first call to Movetail "starts" the enumeration. 
+              // The first call to MoveNext "starts" the enumeration. 
               started <- true;  
               not stack.IsEmpty
 
@@ -421,25 +425,25 @@ type SubMap<'Key,'T when 'Key : comparison>(tree: MapTree<'Key,'T>,tail:SubMap<'
     let enum () =             
         let mutable i = MapTree.MapIterator(tree)
         let mutable tm = tail
+
+        let rec go () =
+            if i.MoveNext() then true 
+            else
+                if Object.ReferenceEquals(null,tm) then
+                    false
+                else
+                    i <-  MapTree.MapIterator(tm.Tree)
+                    tm <- tm.Tail
+                    go ()
         {
             new IEnumerator<_> with 
                 member __.Current = i.Current
             interface System.Collections.IEnumerator with
                 member __.Current = box i.Current
-                member __.MoveNext() = 
-                    let rec go () =
-                        if i.MoveNext() then 
-                            true 
-                        else
-                            if Object.ReferenceEquals(null,tm) then
-                                false
-                            else
-                                i <-  MapTree.MapIterator(tail.Tree)
-                                tm <- tm.Tail
-                                go()
-                    go()
-
-                member __.Reset() = i <- MapTree.MapIterator(tree)
+                member __.MoveNext() = go ()
+                member __.Reset() = 
+                    i <- MapTree.MapIterator(tree)
+                    tm <- tail
             interface System.IDisposable with 
                 member __.Dispose() = () }
 
@@ -450,7 +454,8 @@ type SubMap<'Key,'T when 'Key : comparison>(tree: MapTree<'Key,'T>,tail:SubMap<'
     static member Empty tail = SubMap<'Key,'T>(tree=MapTree.empty,tail=tail)
     
     static member FromOne (k:'Key,v:'T) (tail) = SubMap<'Key,'T>(tree=MapTree.fromOne(k,v),tail=tail)
-    member m.Add(k,v) = refresh m (MapTree.add comparer k v tree)
+    member m.Add(k,v) = SubMap<_,_>(tree=(MapTree.add comparer k v tree), tail=tail) 
+        //refresh m (MapTree.add comparer k v tree)
     member m.IsEmpty = MapTree.isEmpty tree
     member m.Item with get(k : 'Key) = MapTree.find comparer k tree
     member m.First(f) = MapTree.first f tree 
