@@ -1,7 +1,11 @@
 module HashMap
 open System.Collections.Generic
 open System
-open NonStructuralComparison 
+open NonStructuralComparison
+open MapOld
+open SampleData
+
+//let mt = MapTree<_,_>()
 
 [<Literal>] 
 let private ShardSize = 16
@@ -269,16 +273,27 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
     member __.BucketSize with get () = bucket.Length
 
     member __.PrintLayout () =
+        let mutable rowCount = 0
+        let columnCount = Array.zeroCreate<int>(bucket.Length)
         printfn "Printing Layout:"
         for i in 0 .. bucket.Length - 1 do
+            rowCount <- 0
             printf "%3i {" i
             for j in 0 .. ShardSize - 1 do
                 let m = bucket.[i].[j]
                 if isEmpty m then
                     printf " __ |"
                 else
+                    columnCount.[i] <- columnCount.[i] + m.Count
+                    rowCount <- rowCount + m.Count
                     printf " %2i |" m.Count
-            printfn "}"
+            printfn "} = %4i" rowCount
+        
+        printf "Tot {" 
+        for j in 0 .. ShardSize - 1 do
+            printf " %i |" columnCount.[j]
+        printfn "} = %4i" count            
+         
 
 
     interface IEnumerable<KeyValuePair<'K, 'V>> with
@@ -336,105 +351,105 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
 ///////////////////////////////////////////////
 ///////////////////////////////////////////////
 
-let smap = new ShardMap<_,_>(numberStrings)
-let bmap = Map<_,_>(numberStrings)
+// let smap = new ShardMap<_,_>(numberStrings)
+// let bmap = Map<_,_>(numberStrings)
 
-smap.BucketSize
-smap.Count
-smap.PrintLayout()
-calcBitMaskDepth smap.Count
+// smap.BucketSize
+// smap.Count
+// smap.PrintLayout()
+// calcBitMaskDepth smap.Count
 
-2 <<< (11-5)
+// 2 <<< (11-5)
 
-let dict = Dictionary<string,string>()
-for (k,v) in numberStrings do
-    dict.Add(k,v)
+// let dict = Dictionary<string,string>()
+// for (k,v) in numberStrings do
+//     dict.Add(k,v)
 
-//////////////
-for i in 0 .. 10000 do
-    let bmap = Map<_,_>(numberStrings)
-    ()
+// //////////////
+// for i in 0 .. 10000 do
+//     let bmap = Map<_,_>(numberStrings)
+//     ()
 
-for i in 0 .. 10000 do
-    let smap = new ShardMap<_,_>(numberStrings)
-    ()
+// for i in 0 .. 10000 do
+//     let smap = new ShardMap<_,_>(numberStrings)
+//     ()
 
-///////////////
-let lookuploops = 10000
+// ///////////////
+// let lookuploops = 10000
 
-for i in 0 .. lookuploops do
-    for (k,v) in numberStrings do
-        if smap.[k] <> v then printfn "ERROR ON KEY MATCH: %A" k
+// for i in 0 .. lookuploops do
+//     for (k,v) in numberStrings do
+//         if smap.[k] <> v then printfn "ERROR ON KEY MATCH: %A" k
 
-for i in 0 .. lookuploops do
-    for (k,v) in numberStrings do
-        try 
-            if dict.[k] <> v then
-                printfn "ERROR ON KEY MATCH: %A" k
-        with
-        | e -> printfn "ERROR: %s >> %A" k e
+// for i in 0 .. lookuploops do
+//     for (k,v) in numberStrings do
+//         try 
+//             if dict.[k] <> v then
+//                 printfn "ERROR ON KEY MATCH: %A" k
+//         with
+//         | e -> printfn "ERROR: %s >> %A" k e
 
-for i in 0 .. lookuploops do
-    for (k,v) in numberStrings do
-        if bmap.[k] <> v then printfn "ERROR ON KEY MATCH: %A" k
+// for i in 0 .. lookuploops do
+//     for (k,v) in numberStrings do
+//         if bmap.[k] <> v then printfn "ERROR ON KEY MATCH: %A" k
         
-////////////
-let copyloops = 1000000
-for i in 0 .. copyloops do
-    let ndict = Dictionary<_,_>(dict)
-    let k,v = "Key1","Value1" 
-    ndict.Add(k,v)
-    if not(ndict.ContainsKey(k)) || dict.ContainsKey(k) then failwith "Immutablity Error"
+// ////////////
+// let copyloops = 1000000
+// for i in 0 .. copyloops do
+//     let ndict = Dictionary<_,_>(dict)
+//     let k,v = "Key1","Value1" 
+//     ndict.Add(k,v)
+//     if not(ndict.ContainsKey(k)) || dict.ContainsKey(k) then failwith "Immutablity Error"
 
 
-for i in 0 .. copyloops do
-    let k,v = "Key1","Value1" 
-    let ndict = smap.AddToNew(k,v)
-    //ndict.Add(k,v)
-    if not(ndict.ContainsKey(k)) then failwith "new dict does not contain added value"
-    if smap.ContainsKey(k) then failwith "old dict has newly added value"
+// for i in 0 .. copyloops do
+//     let k,v = "Key1","Value1" 
+//     let ndict = smap.AddToNew(k,v)
+//     //ndict.Add(k,v)
+//     if not(ndict.ContainsKey(k)) then failwith "new dict does not contain added value"
+//     if smap.ContainsKey(k) then failwith "old dict has newly added value"
 
-for i in 0 .. copyloops do
-    let k,v = "Key1","Value1" 
-    smap.Add(k,v)
-    //ndict.Add(k,v)
-    if not(smap.ContainsKey(k)) then failwith "failed to addadded value"
+// for i in 0 .. copyloops do
+//     let k,v = "Key1","Value1" 
+//     smap.Add(k,v)
+//     //ndict.Add(k,v)
+//     if not(smap.ContainsKey(k)) then failwith "failed to addadded value"
 
-for i in 0 .. copyloops do
-    let k,v = "Key1","Value1"
-    let ndict = bmap.Add(k,v)
-    if not(ndict.ContainsKey(k)) then failwith "new dict does not contain added value"
-    if bmap.ContainsKey(k) then failwith "old dict has newly added value"
+// for i in 0 .. copyloops do
+//     let k,v = "Key1","Value1"
+//     let ndict = bmap.Add(k,v)
+//     if not(ndict.ContainsKey(k)) then failwith "new dict does not contain added value"
+//     if bmap.ContainsKey(k) then failwith "old dict has newly added value"
 
-///////////
-let ittrLoops = 10000
+// ///////////
+// let ittrLoops = 10000
 
-let mutable counter = 0
+// let mutable counter = 0
 
-for i in 0 .. ittrLoops do
-    smap |> Seq.iter (fun kvp -> 
-        let k = kvp.Key
-        let v = kvp.Value
-        //counter <- counter + 1
-        ()
-    )
-printfn "counter: %i" counter
+// for i in 0 .. ittrLoops do
+//     smap |> Seq.iter (fun kvp -> 
+//         let k = kvp.Key
+//         let v = kvp.Value
+//         //counter <- counter + 1
+//         ()
+//     )
+// printfn "counter: %i" counter
 
-for i in 0 .. ittrLoops do
-    bmap |> Seq.iter (fun kvp -> 
-        let k = kvp.Key
-        let v = kvp.Value
-        //counter <- counter + 1
-        ()
-    ) 
-printfn "counter: %i" counter
-
-
-let bmap = bmap.Remove("Key1")
-
-dict.Count   
-
-smap.["Elekta"];;
+// for i in 0 .. ittrLoops do
+//     bmap |> Seq.iter (fun kvp -> 
+//         let k = kvp.Key
+//         let v = kvp.Value
+//         //counter <- counter + 1
+//         ()
+//     ) 
+// printfn "counter: %i" counter
 
 
-#time
+// let bmap = bmap.Remove("Key1")
+
+// dict.Count   
+
+// smap.["Elekta"];;
+
+
+// #time

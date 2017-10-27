@@ -4,6 +4,9 @@
     <TargetFramework>netcoreapp2.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="MapOld.fs" />
+    <Compile Include="SampleData.fs" />
+    <Compile Include="HashMap.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 </Project>
