@@ -21,3 +21,5 @@ obj/project.assets.json
 obj/fsac.cache
 obj/MapTests.fsproj.nuget.cache
 obj/project.assets.json
+obj/
+bin/

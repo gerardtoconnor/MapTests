@@ -1,11 +1,13 @@
 module HashMap
+
+open MapOld
+open SampleData
+#time
+
 open System.Collections.Generic
 open System
 open NonStructuralComparison
-open MapOld
-open SampleData
 
-let mapMyTree (mt:MapTree<_,_>) =()
 
 
 [<Literal>] 
@@ -15,9 +17,13 @@ let private ShardSize = 16
 // Helper Functions
 ////////////////////////////
 
-let calcBitMaskDepth itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2))) //todo:make private
+//let calcBitMaskDepth itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2))) //todo:make private
+let inline calcBitMaskDepth i =
+    let rec go s d =
+        if s = 0 then d
+        else go (s >>> 1) (d + 1)
+    go i 0
 let inline private pow2 (i:int) = 2 <<< (i - 5) // todo 4 is shard size 2^n
-
 let inline calcSubBitMask (bitDepth:int) = ~~~(-1 <<< (bitDepth))
 
 ///prvides index in bucket of shard
@@ -32,7 +38,7 @@ let inline private isEmpty v = Object.ReferenceEquals(null,v)
 /// Shard Map Ittr
 ////////////////////////////
 
-type ShardMapIterator<'K,'V when 'K : comparison>(bucket:Map<'K,'V> [] []) =
+type ShardMapIterator<'K,'V when 'K : comparison>(bucket:SubMap<'K,'V> [] []) =
     let mutable mapEnum = Unchecked.defaultof<IEnumerator<KeyValuePair<'K,'V>>>
     let mutable bi = 0
     let mutable si = 0
@@ -41,71 +47,78 @@ type ShardMapIterator<'K,'V when 'K : comparison>(bucket:Map<'K,'V> [] []) =
     let mutable skipped = 0
     let mutable found = 0
     
-    let rec nextMap () =
+    // let rec nextMap () =
 
-        let testMap () = 
-            let m = bucket.[bi].[si]
-            if isEmpty m then
-                skipped <- skipped + 1 
-                nextMap ()
-            else
-                found <- found + 1
-                mapEnum <- (m :> IEnumerable<_>).GetEnumerator()
-                if mapEnum.MoveNext() then
-                    true
-                else
-                    nextMap ()    
+    //     let testMap () = 
+    //         let m = bucket.[bi].[si]
+    //         if isEmpty m then
+    //             skipped <- skipped + 1 
+    //             nextMap ()
+    //         else
+    //             found <- found + 1
+    //             mapEnum <- (m :> IEnumerable<_>).GetEnumerator()
+    //             if mapEnum.MoveNext() then
+    //                 true
+    //             else
+    //                 nextMap ()    
 
-        if si + 1 < ShardSize then
-            si <- si + 1
-            testMap ()           
-        else
-            if bi + 1 < bucket.Length then
-                bi <- bi + 1
-                si <- 0
-                testMap ()
-            else
-                //printfn "itterator disposed with %i found and %i skipped" found skipped
-                false
+    //     if si + 1 < ShardSize then
+    //         si <- si + 1
+    //         testMap ()           
+    //     else
+    //         if bi + 1 < bucket.Length then
+    //             bi <- bi + 1
+    //             si <- 0
+    //             testMap ()
+    //         else
+    //             //printfn "itterator disposed with %i found and %i skipped" found skipped
+    //             false
 
-    member __.Current = mapEnum.Current
-    member __.MoveNext() = 
-        if started then
-            if mapEnum.MoveNext() then 
-                true
-            else
-                nextMap ()
-        else
-            started <- true
-            let m = bucket.[0].[0]
-            if isEmpty m then
-                skipped <- skipped + 1 
-                nextMap ()
-            else
-                found <- found + 1
-                mapEnum <- (m :> IEnumerable<_>).GetEnumerator()
-                if mapEnum.MoveNext() then
-                    true
-                else
-                    nextMap () 
-    member __.Reset() =
-        bi <- 0
-        si <- 0
-        started <- false
+    // member __.Current = mapEnum.Current
+    // member __.MoveNext() = 
+    //     if started then
+    //         if mapEnum.MoveNext() then 
+    //             true
+    //         else
+    //             nextMap ()
+    //     else
+    //         started <- true
+    //         let m = bucket.[0].[0]
+    //         if isEmpty m then
+    //             skipped <- skipped + 1 
+    //             nextMap ()
+    //         else
+    //             found <- found + 1
+    //             mapEnum <- (m :> IEnumerable<_>).GetEnumerator()
+    //             if mapEnum.MoveNext() then
+    //                 true
+    //             else
+    //                 nextMap () 
+    // member __.Reset() =
+    //     bi <- 0
+    //     si <- 0
+    //     started <- false
 
-    member __.Dispose() = ()
+    // member __.Dispose() = ()
 
 
 
 /// Shard Map
 ////////////////////////////
 
-type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket: Map<'K,'V> [] []) =
+type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket:SubMap<'K,'V> [] [], ihead:SubMap<'K,'V>) =
 
-    let empty = Array.zeroCreate<Map<'K,'V>>(ShardSize)
+    let empty = Array.zeroCreate<SubMap<'K,'V>>(ShardSize)
+
+    let mutable subMapHead = ihead
+
+    let genNewSubMap kvt =
+        let sm = SubMap<_,_>.FromOne kvt subMapHead
+        subMapHead <- sm
+        sm
 
     let newShard oary = 
-        let nary = Array.zeroCreate<Map<'K,'V>>(ShardSize)
+        let nary = Array.zeroCreate<SubMap<'K,'V>>(ShardSize)
         Array.Copy(oary,nary,ShardSize)
         nary
 
@@ -152,7 +165,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
 
                 let isize = bucket.Length
                 let ibmd = calcBitMaskDepth isize
-                let newBucket = Array.zeroCreate<Map<'K,'V> []> (isize * 2)
+                let newBucket = Array.zeroCreate<SubMap<'K,'V> []> (isize * 2)
                 let newRIndex = Array.zeroCreate<int> (isize * 2) // <<< todo: change to create -1s so rindex can be checked processing and at end
                 for i in 0 .. isize - 1 do
                     let shrd = bucket.[i]
@@ -169,7 +182,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
                         for j in 0 .. 7 do
                             let m = shrd.[j]
                             if not (isEmpty m) then
-                                let m1,m0 = Map.partition (fun k _ -> (k.GetHashCode() >>> ibmd) &&& 0b1 = 1) m
+                                let m1,m0 = m.Partition (fun k _ -> (k.GetHashCode() >>> ibmd) &&& 0b1 = 1)
                                 
                                 if not m0.IsEmpty then
                                     let mutable shrd = newBucket.[i]
@@ -203,7 +216,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
         bucket.[bi] <- shrd
         let m = shrd.[si]
         if isEmpty m then
-            shrd.[si] <- Map<'K,'V>([(k,v)])
+            shrd.[si] <- genNewSubMap (k,v)
         else
             shrd.[si] <- m.Add(k,v)
 
@@ -220,9 +233,9 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
             shrd.[si] <- m.Remove(k)
 
     member __.Copy() =        
-        let nBucket = Array.zeroCreate<Map<'K,'V>[]>(nBucket.Length)
+        let nBucket = Array.zeroCreate<SubMap<'K,'V>[]>(nBucket.Length)
         Array.Copy(bucket,nBucket,bucket.Length)
-        ShardMap<'K,'V>(count,nBucket)
+        ShardMap<'K,'V>(count,nBucket,subMapHead)
                 
     member x.AddToNew(k:'K,v:'V) =
         let newShardMap = x.Copy()
@@ -249,24 +262,24 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
         else
             m.ContainsKey key
 
-    member __.toSeqSlow () = seq {
-            for i in 0 .. bucket.Length - 1 do
-                for j in 0 .. ShardSize - 1 do
-                    let m = bucket.[i].[j]
-                    if not(isEmpty m) then
-                        for kvp in m -> kvp
-        }
+    // member __.toSeqSlow () = seq {
+    //         for i in 0 .. bucket.Length - 1 do
+    //             for j in 0 .. ShardSize - 1 do
+    //                 let m = bucket.[i].[j]
+    //                 if not(isEmpty m) then
+    //                     for kvp in m -> kvp
+    //     }
 
-    member __.toSeq () = 
-        let i = ref (ShardMapIterator(bucket))
-        { new IEnumerator<_> with 
-                  member self.Current = (!i).Current
-              interface System.Collections.IEnumerator with
-                  member self.Current = box (!i).Current
-                  member self.MoveNext() = (!i).MoveNext()
-                  member self.Reset() = i :=  ShardMapIterator(bucket)
-              interface System.IDisposable with 
-                  member self.Dispose() = ()}
+    // member __.toSeq () = 
+    //     let i = ref (ShardMapIterator(bucket))
+    //     { new IEnumerator<_> with 
+    //               member self.Current = (!i).Current
+    //           interface System.Collections.IEnumerator with
+    //               member self.Current = box (!i).Current
+    //               member self.MoveNext() = (!i).MoveNext()
+    //               member self.Reset() = i :=  ShardMapIterator(bucket)
+    //           interface System.IDisposable with 
+    //               member self.Dispose() = ()}
 
 
     member __.Count with get () = count
@@ -294,14 +307,21 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
         for j in 0 .. ShardSize - 1 do
             printf " %i |" columnCount.[j]
         printfn "} = %4i" count            
-         
+    
+    member __.SubMapList () =
+        let rec go (sm:SubMap<_,_>) acc =
+            if isEmpty sm then
+                acc
+            else
+                go sm.Tail (sm :: acc) 
+        go subMapHead []
 
 
     interface IEnumerable<KeyValuePair<'K, 'V>> with
-        member s.GetEnumerator() = s.toSeq ()
+        member s.GetEnumerator() = subMapHead.ToSeq()
 
     interface System.Collections.IEnumerable with
-        override s.GetEnumerator() = (s.toSeq () :> System.Collections.IEnumerator)
+        override s.GetEnumerator() = (subMapHead.ToSeq() :> System.Collections.IEnumerator)
 
         
     new(counter:int,items:('K * 'V) seq) =
@@ -309,8 +329,9 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
         let bitdepth = calcBitMaskDepth counter
         let bucketSize = pow2 bitdepth
         let bucketBitMask = calcSubBitMask bitdepth
-        let newBucket = Array.zeroCreate<Map<'K,'V> []>(bucketSize)
-        
+        let newBucket = Array.zeroCreate<SubMap<'K,'V> []>(bucketSize)
+        let mutable mapHead = Unchecked.defaultof<SubMap<_,_>>
+
         items
         |> Seq.iter (fun (k,v) -> 
                 let kh = k.GetHashCode()
@@ -324,14 +345,16 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
                 shrd.[si] <- 
                     if isEmpty m then
                         //printfn "$| creating new map for key:'%A' [%i][%i] for value:%A" k bi si v
-                        Map<'K,'V>([(k,v)])
+                        let m2 = SubMap<_,_>.FromOne (k,v) mapHead
+                        mapHead <- m2
+                        m2
                     else
                         //printfn "+| adding key:'%A' [%i][%i] for value:%A to map {%A}" k bi si v m
                         m.Add(k,v)                
             )
         //now allocate any empties that were not filled
         
-        ShardMap<'K,'V>(counter,newBucket)
+        ShardMap<'K,'V>(counter,newBucket,mapHead)
 
     new(kvps:('K * 'V) seq) =       
         let mutable counter = 0
@@ -352,44 +375,44 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
 ///////////////////////////////////////////////
 ///////////////////////////////////////////////
 
-// let smap = new ShardMap<_,_>(numberStrings)
-// let bmap = Map<_,_>(numberStrings)
+let smap = new ShardMap<_,_>(numberStrings)
+let bmap = Map<_,_>(numberStrings)
 
-// smap.BucketSize
-// smap.Count
-// smap.PrintLayout()
-// calcBitMaskDepth smap.Count
+smap.BucketSize
+smap.Count
+smap.PrintLayout()
+calcBitMaskDepth smap.Count
 
-// 2 <<< (11-5)
+2 <<< (11-5)
 
-// let dict = Dictionary<string,string>()
-// for (k,v) in numberStrings do
-//     dict.Add(k,v)
+let dict = Dictionary<string,string>()
+for (k,v) in numberStrings do
+    dict.Add(k,v)
 
-// //////////////
-// for i in 0 .. 10000 do
-//     let bmap = Map<_,_>(numberStrings)
-//     ()
+//////////////
+for i in 0 .. 10000 do
+    let bmap = Map<_,_>(numberStrings)
+    ()
 
-// for i in 0 .. 10000 do
-//     let smap = new ShardMap<_,_>(numberStrings)
-//     ()
+for i in 0 .. 10000 do
+    let smap = new ShardMap<_,_>(numberStrings)
+    ()
 
-// ///////////////
-// let lookuploops = 10000
+///////////////
+let lookuploops = 10000
 
-// for i in 0 .. lookuploops do
-//     for (k,v) in numberStrings do
-//         if smap.[k] <> v then printfn "ERROR ON KEY MATCH: %A" k
+for i in 0 .. lookuploops do
+    for (k,v) in numberStrings do
+        if smap.[k] <> v then printfn "ERROR ON KEY MATCH: %A" k
 
 for i in 0 .. lookuploops do
     for (k,v) in numberStrings do
         if dict.[k] <> v then
             printfn "ERROR ON KEY MATCH: %A" k
 
-// for i in 0 .. lookuploops do
-//     for (k,v) in numberStrings do
-//         if bmap.[k] <> v then printfn "ERROR ON KEY MATCH: %A" k
+for i in 0 .. lookuploops do
+    for (k,v) in numberStrings do
+        if bmap.[k] <> v then printfn "ERROR ON KEY MATCH: %A" k
         
 ////////////
 let copyloops = 100000
@@ -423,12 +446,13 @@ for i in 0 .. copyloops do
 let ittrLoops = 10000
 
 let mutable counter = 0
+printfn "coutner:%i" counter
 
 for i in 0 .. ittrLoops do
     smap |> Seq.iter (fun kvp -> 
         let k = kvp.Key
         let v = kvp.Value
-        //counter <- counter + 1
+        counter <- counter + 1
         ()
     )
 
@@ -436,7 +460,7 @@ for i in 0 .. ittrLoops do
     bmap |> Seq.iter (fun kvp -> 
         let k = kvp.Key
         let v = kvp.Value
-        //counter <- counter + 1
+        counter <- counter + 1
         ()
     ) 
 

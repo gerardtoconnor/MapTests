@@ -1,8 +1,8 @@
-module MapOld
+module MapOld 
 
-//#nowarn "51"
-//#nowarn "69" // interface implementations in augmentations
-//#nowarn "60" // override implementations in augmentations
+#nowarn "51"
+#nowarn "69" // interface implementations in augmentations
+#nowarn "60" // override implementations in augmentations
 
 open Microsoft.FSharp.Core
 open Microsoft.FSharp.Core.Operators
@@ -343,7 +343,7 @@ module MapTree =
     let fromOne (k:'Key,v:'T) = MapOne(k,v)
 
     /// Imperative left-to-right iterators.
-    type MapIterator<'Key,'T>(s:MapTree<'Key,'T>) = 
+    type MapIterator<'Key,'T when 'Key : comparison>(s:MapTree<'Key,'T>) = 
         // collapseLHS:
         // a) Always returns either [] or a list starting with SetOne.
         // b) The "fringe" of the set stack is unchanged. 
@@ -360,10 +360,10 @@ module MapTree =
       
           /// invariant: always collapseLHS result 
         let mutable stack = collapseLHS [s]
-           /// true when MoveNext has been called   
+           /// true when Movetail has been called   
         let mutable started = false
 
-        let notStarted() = raise (new System.InvalidOperationException("Enumeration has not started. Call MoveNext."))
+        let notStarted() = raise (new System.InvalidOperationException("Enumeration has not started. Call Movetail."))
         let alreadyFinished() = raise (new System.InvalidOperationException("Enumeration already finished."))
 
         member i.Current =
@@ -390,40 +390,66 @@ module MapTree =
                   stack <- collapseLHS rest;
                   not stack.IsEmpty
               | [] -> false
-              | _ -> failwith "Please report error: Map iterator, unexpected stack for moveNext"
+              | _ -> failwith "Please report error: Map iterator, unexpected stack for movetail"
           else
-              // The first call to MoveNext "starts" the enumeration. 
+              // The first call to Movetail "starts" the enumeration. 
               started <- true;  
               not stack.IsEmpty
 
-    let toSeq s = 
-        let i = ref (MapIterator(s))
-        { new IEnumerator<_> with 
-              member self.Current = (!i).Current
-          interface System.Collections.IEnumerator with
-              member self.Current = box (!i).Current
-              member self.MoveNext() = (!i).MoveNext()
-              member self.Reset() = i :=  MapIterator(s)
-          interface System.IDisposable with 
-              member self.Dispose() = ()}
+    // let toSeq s = 
+    //     let mutable i = MapIterator(s)
+    //     { new IEnumerator<_> with 
+    //           member self.Current = i.Current
+    //       interface System.Collections.IEnumerator with
+    //           member self.Current = box i.Current
+    //           member self.MoveNext() = i.MoveNext()
+    //           member self.Reset() = i <- MapIterator(s)
+    //       interface System.IDisposable with 
+    //           member self.Dispose() = ()}
 
 
 //////////// Alternative MAP Wrapper
 [<System.Diagnostics.DebuggerDisplay ("Count = {Count}")>]
 [<Sealed>]
-type SubMap<'Key,'T,'ComparerTag> when 'ComparerTag :> IComparer<'Key>( comparer: IComparer<'Key>, tree: MapTree<'Key,'T>,next:SubMap<'Key,'T,'ComparerTag>) =
+type SubMap<'Key,'T when 'Key : comparison>(tree: MapTree<'Key,'T>,tail:SubMap<'Key,'T>) =
 
-    static let refresh (m:SubMap<_,_,'ComparerTag>) t = 
-        SubMap<_,_,'ComparerTag>(comparer=m.Comparer, tree=t, next=m.Next)
+    static let refresh (m:SubMap<_,_>) t = 
+        SubMap<_,_>(tree=t, tail=m.Tail)
 
-    member s.Next = next
-    member s.Tree = tree
+    let comparer = LanguagePrimitives.FastGenericComparer<'Key>
+
+    let enum () =             
+        let mutable i = MapTree.MapIterator(tree)
+        let mutable tm = tail
+        {
+            new IEnumerator<_> with 
+                member __.Current = i.Current
+            interface System.Collections.IEnumerator with
+                member __.Current = box i.Current
+                member __.MoveNext() = 
+                    let rec go () =
+                        if i.MoveNext() then 
+                            true 
+                        else
+                            if Object.ReferenceEquals(null,tm) then
+                                false
+                            else
+                                i <-  MapTree.MapIterator(tail.Tree)
+                                tm <- tm.Tail
+                                go()
+                    go()
+
+                member __.Reset() = i <- MapTree.MapIterator(tree)
+            interface System.IDisposable with 
+                member __.Dispose() = () }
+
     member s.Comparer : IComparer<'Key> = comparer
-
-
-    static member Empty(comparer : 'ComparerTag) (next) = SubMap<'Key,'T,'ComparerTag>(comparer=comparer, tree=MapTree.empty,next=next)
+    member s.Tail : SubMap<'Key,'T> = tail
+    member s.Tree : MapTree<'Key,'T> = tree
+   
+    static member Empty tail = SubMap<'Key,'T>(tree=MapTree.empty,tail=tail)
     
-    static member FromOne(comparer : 'ComparerTag) (k:'Key,v:'T) (next) = SubMap<'Key,'T,'ComparerTag>(comparer=comparer, tree=MapTree.fromOne(k,v),next=next)
+    static member FromOne (k:'Key,v:'T) (tail) = SubMap<'Key,'T>(tree=MapTree.fromOne(k,v),tail=tail)
     member m.Add(k,v) = refresh m (MapTree.add comparer k v tree)
     member m.IsEmpty = MapTree.isEmpty tree
     member m.Item with get(k : 'Key) = MapTree.find comparer k tree
@@ -449,22 +475,24 @@ type SubMap<'Key,'T,'ComparerTag> when 'ComparerTag :> IComparer<'Key>( comparer
     member m.ToList() = MapTree.toList tree
     member m.ToArray() = MapTree.toArray tree
 
-    static member FromList(comparer : 'ComparerTag,next,l) : SubMap<'Key,'T,'ComparerTag> = 
-        SubMap<_,_,_>(comparer=comparer, tree=MapTree.ofList comparer l,next=next)
+    member m.ToSeq() = enum()
 
-    static member Create(comparer : 'ComparerTag, next, ie : seq<_>) : SubMap<'Key,'T,'ComparerTag> = 
-        SubMap<_,_,_>(comparer=comparer, tree=MapTree.ofSeq comparer ie,next=next)
+    static member FromList(comparer : 'ComparerTag,tail,l) : SubMap<'Key,'T> = 
+        SubMap<_,_>(tree=MapTree.ofList comparer l,tail=tail)
+
+    static member Create(comparer : 'ComparerTag, tail, ie : seq<_>) : SubMap<'Key,'T> = 
+        SubMap<_,_>(tree=MapTree.ofSeq comparer ie,tail=tail)
 
     interface IEnumerable<KeyValuePair<'Key, 'T>> with
-        member s.GetEnumerator() = MapTree.toSeq tree
+        member s.GetEnumerator() = enum ()
 
     interface System.Collections.IEnumerable with
-        override s.GetEnumerator() = (MapTree.toSeq tree :> System.Collections.IEnumerator)
+        override s.GetEnumerator() = (enum () :> System.Collections.IEnumerator)
 
     override this.Equals(that) = 
         match that with
         // Cast to the exact same type as this, otherwise not equal.
-        | :? SubMap<'Key,'T,'ComparerTag> as that -> ((this :> System.IComparable).CompareTo(that) = 0)
+        | :? SubMap<'Key,'T> as that -> ((this :> System.IComparable).CompareTo(that) = 0)
         | _ -> false
 
     interface System.IComparable with 
@@ -475,7 +503,7 @@ type SubMap<'Key,'T,'ComparerTag> when 'ComparerTag :> IComparer<'Key>( comparer
                    if c <> 0 then c else Unchecked.compare kvp1.Value kvp2.Value)
                // Cast m2 to the exact same type as m1, see 4884.
                // It is not OK to cast m2 to seq<KeyValuePair<'Key,'T>>, since different compares could permute the KVPs.
-               m1 (m2 :?> SubMap<'Key,'T,'ComparerTag>)
+               m1 (m2 :?> SubMap<'Key,'T>)
 
     member this.ComputeHashCode() = 
         let combineHash x y = (x <<< 1) + y + 631 
