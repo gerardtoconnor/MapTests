@@ -5,7 +5,8 @@ open NonStructuralComparison
 open MapOld
 open SampleData
 
-//let mt = MapTree<_,_>()
+let mapMyTree (mt:MapTree<_,_>) =()
+
 
 [<Literal>] 
 let private ShardSize = 16
