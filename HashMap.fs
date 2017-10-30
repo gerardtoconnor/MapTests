@@ -356,7 +356,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
                         m2
                     else
                         //printfn "+| adding key:'%A' [%i][%i] for value:%A to map {%A}" k bi si v m
-                        m.Add(k,v)                
+                        m.Add(k,v)                        
             )
         //now allocate any empties that were not filled
         
@@ -381,7 +381,25 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison>(icount:int, nBucket
 ///////////////////////////////////////////////
 ///////////////////////////////////////////////
 
+let emptySM = Unchecked.defaultof<SubMap<string,string>>
+let smt = SubMap<_,_>.FromOne ("jhlkh","poinkjh") emptySM
+smt.Tail
+printfn "%A" smt
+
+let smt1 = smt.Add("poijoihj","vyrctoiuou")  
+printfn "%A" smt1
+smt.Tail
+let smt2 = SubMap<_,_>.FromOne ("dsdfdlkh","poinsfvdsf") smt1
+smt2.Tail
+let smt3 = smt2.Add("asfaposdiufad","ghadfjfksaldjf")
+smt3.Tail
+for v in smt3 do
+    printfn "%A" v
+Object.ReferenceEquals(smt1,smt2.Tail)
+
 let smap = new ShardMap<_,_>(numberStrings)
+smap1.GetHashCode()
+let smap1 = smap.AddToNew("alkdfjas","fadfdf")
 let bmap = Map<_,_>(numberStrings)
 
 smap.BucketSize
@@ -490,9 +508,9 @@ for i in 0 .. ittrLoops do
     )
 Seq.length smap
 
-smap |> Seq.iter (fun kvp ->
-    printfn "'%A':'%A'" kvp.Key kvp.Value
-)
+    smap |> Seq.iter (fun kvp ->
+        printfn "'%A':'%A'" kvp.Key kvp.Value
+    )
 
 let bmap = bmap.Remove("Key1")
 

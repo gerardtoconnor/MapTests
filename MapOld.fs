@@ -453,7 +453,7 @@ type SubMap<'Key,'T when 'Key : comparison>(tree: MapTree<'Key,'T>,tail:SubMap<'
    
     static member Empty tail = SubMap<'Key,'T>(tree=MapTree.empty,tail=tail)
     
-    static member FromOne (k:'Key,v:'T) (tail) = SubMap<'Key,'T>(tree=MapTree.fromOne(k,v),tail=tail)
+    static member FromOne (k:'Key,v:'T) tail = SubMap<'Key,'T>(tree=MapTree.fromOne(k,v),tail=tail)
     member m.Add(k,v) = SubMap<_,_>(tree=(MapTree.add comparer k v tree), tail=tail) 
         //refresh m (MapTree.add comparer k v tree)
     member m.IsEmpty = MapTree.isEmpty tree
