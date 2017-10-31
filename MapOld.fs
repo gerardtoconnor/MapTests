@@ -367,8 +367,8 @@ module MapTree =
         let alreadyFinished() = raise (new System.InvalidOperationException("Enumeration already finished."))
 
         //Added for debug -----
-        do
-            printfn "MapIterator Created from Map[%i]" (count s)
+        // do
+        //     printfn "MapIterator Created from Map[%i]" (count s)
         //--------------------
         member i.Current =
             if started then
@@ -423,7 +423,7 @@ type SubMap<'Key,'T when 'Key : comparison>(tree: MapTree<'Key,'T>,tail:SubMap<'
     let comparer = LanguagePrimitives.FastGenericComparer<'Key>
 
     let enum () =             
-        let mutable i = MapTree.MapIterator(tree)
+        let mutable i = MapTree.MapIterator<_,_>(tree)
         let mutable tm = tail
 
         let rec go () =
@@ -432,7 +432,7 @@ type SubMap<'Key,'T when 'Key : comparison>(tree: MapTree<'Key,'T>,tail:SubMap<'
                 if Object.ReferenceEquals(null,tm) then
                     false
                 else
-                    i <-  MapTree.MapIterator(tm.Tree)
+                    i <-  MapTree.MapIterator<_,_>(tm.Tree)
                     tm <- tm.Tail
                     go ()
         {
