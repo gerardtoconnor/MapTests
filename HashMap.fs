@@ -20,6 +20,7 @@ open Microsoft.FSharp.Core
 open Microsoft.FSharp.Core.Operators
 open Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicOperators
 open System
+open System.Threading
 open System.Collections.Generic
 // open Internal.Utilities
 // open Internal.Utilities.Collections
@@ -354,67 +355,6 @@ module MapTree =
     ///// Additional add single map entry
     let fromOne (k:'Key,v:'T) = MapOne(k,v)
 
-    /// Imperative left-to-right iterators.
-    type MapIterator<'Key,'T when 'Key : comparison>(s:MapTree<'Key,'T>) = 
-        // collapseLHS:
-        // a) Always returns either [] or a list starting with SetOne.
-        // b) The "fringe" of the set stack is unchanged. 
-        let rec collapseLHS stack =
-            match stack with
-            | []                           -> []
-            | MapEmpty             :: rest -> collapseLHS rest
-#if ONE 
-            | MapOne _         :: _ -> stack
-#else
-            | (MapNode(_,_,MapEmpty,MapEmpty,_)) :: _ -> stack
-#endif
-            | (MapNode(k,v,l,r,_)) :: rest -> collapseLHS (l :: MapOne (k,v) :: r :: rest)
-      
-          /// invariant: always collapseLHS result 
-        let mutable stack = collapseLHS [s]
-           /// true when Movetail has been called   
-        let mutable started = false
-
-        let notStarted() = raise (new System.InvalidOperationException("Enumeration has not started. Call MoveNext."))
-        let alreadyFinished() = raise (new System.InvalidOperationException("Enumeration already finished."))
-
-        //Added for debug -----
-        // do
-        //     printfn "MapIterator Created from Map[%i]" (count s)
-        //--------------------
-        member i.Current =
-            if started then
-                match stack with
-#if ONE
-                  | MapOne (k,v) :: _ -> new KeyValuePair<_,_>(k,v)
-#else
-                  | (MapNode(k,v,MapEmpty,MapEmpty,_)) :: _ -> new KeyValuePair<_,_>(k,v)
-#endif
-                  | []            -> alreadyFinished()
-                  | _             -> failwith "Please report error: Map iterator, unexpected stack for current"
-            else
-                notStarted()
-
-        member i.MoveNext() =
-          if started then
-            match stack with
-#if ONE
-              | MapOne _ :: rest -> 
-#else
-              | (MapNode(_,_,MapEmpty,MapEmpty,_)) :: rest -> 
-#endif
-                  stack <- collapseLHS rest;
-                  not stack.IsEmpty
-              | [] -> false
-              | _ -> failwith "Please report error: Map iterator, unexpected stack for movenext"
-          else
-              // The first call to MoveNext "starts" the enumeration. 
-              started <- true;  
-              not stack.IsEmpty
-
-
-
-
 
 ////////////////////////////
 ////////////////////////
@@ -446,62 +386,13 @@ let inline calcSubBitMask (bitDepth:int) = ~~~(-1 <<< (bitDepth))
 ///prvides index in bucket of shard
 let inline private bucketIndex (keyHash:int,subBitMask:int) = (keyHash &&& subBitMask) >>> 4// todo: improve substring bitmask calc
 
-let inline private bucketIndexOld (keyHash:int,bitdepth:int) = (keyHash &&& (~~~(-1 <<< (bitdepth)))) >>> 4// todo: improve substring bitmask calc
+///let inline private bucketIndexOld (keyHash:int,bitdepth:int) = (keyHash &&& (~~~(-1 <<< (bitdepth)))) >>> 4// todo: improve substring bitmask calc
 
 ///provides sub index in shards
 let inline private shardIndex (keyHash:int) = keyHash &&& 0b1111
 let inline private isEmpty v = Object.ReferenceEquals(null,v)
 
-/// Shard Map Ittr
-////////////////////////////
-
-type ShardMapIterator<'K,'V when 'K : comparison>(bucket:MapTree<'K,'V> [] []) =
-    let mutable mapEnum = Unchecked.defaultof<MapTree.MapIterator<_,_>>
-
-    let mutable buffer = []
-    let mutable nextBucket = 0
-    
-    let mutable started = false
-
-    let rec nextMap ls =
-        match ls with
-        | [] ->
-            if nextBucket + 1 > bucket.Length then
-                false
-            else            
-                let bkt = bucket.[nextBucket]
-                nextBucket <- nextBucket + 1
-                buffer <- []
-                for si in 0 .. ShardSize - 1 do
-                    if Object.ReferenceEquals(null,bkt.[si]) |> not then
-                        buffer <- bkt.[si] :: buffer
-                nextMap buffer
-        | h :: t ->
-            mapEnum <- MapTree.MapIterator(h)
-            if mapEnum.MoveNext() then
-                buffer <- t
-                true
-            else
-                nextMap t 
-
-    member __.Current = mapEnum.Current
-    member __.MoveNext() = 
-        if started then
-            if mapEnum.MoveNext() then 
-                true
-            else
-                nextMap buffer
-        else
-            started <- true
-            nextMap []
-    member __.Reset() =
-        nextBucket <- 0
-        buffer <- []
-        started <- false
-
-    member __.Dispose() = ()
-
-
+let inline private higherRange (index:int,bitdepth:int) = (index ||| (1 <<< bitdepth)) >>> 4
 
 /// Shard Map
 ////////////////////////////
@@ -521,34 +412,84 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         nary
 
     let mutable bucket = nBucket 
-        // Array.init InitialSize (fun i -> 
-        //     let ri,shrd = buffer.Empty()
-        //     rindex.[i] <- ri
-        //     shrd
-        // )
+
     //Lock variables
     let mutable resizing = false
     let resizeLock = obj
 
-    let mutable count = icount 
+    let countRef = ref icount
 
     //let calcBitMaskDepth itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2)))
-
-    let mutable bitMaskDepth = calcBitMaskDepth icount
+    let mutable bitMaskDepth = (calcBitMaskDepth icount)
     
     let mutable bucketBitMask = calcSubBitMask bitMaskDepth
     ///provides index in local bucket of shard
 
+    let mapList () =
+        let mutable result = []
+        for bi in 0 .. bucket.Length - 1 do
+            for si in 0 .. ShardSize - 1 do
+                if not(isEmpty bucket.[bi].[si]) then
+                    result <- bucket.[bi].[si] :: result
+        result
 
-    let higherRange (index:int,bitdepth:int) = (index ||| 1 <<< bitdepth) >>> 4 
-
-    let item (key:'K) =
+    let getMap (key:'K) =
         let kh = key.GetHashCode()
-        let m = bucket.[bucketIndex(kh,bucketBitMask)].[shardIndex kh]
+        bucket.[bucketIndex(kh,bucketBitMask)].[shardIndex kh] 
+    let item (key:'K) =
+        let m = getMap key
         if isEmpty m then
             raise <| KeyNotFoundException(sprintf "Key:%A , does not exist in the dictionary" key)
         else
             MapTree.find comparer key m
+
+    let tryFind (key:'K) =
+        let m = getMap key
+        if isEmpty m then
+            None
+        else
+            MapTree.tryFind comparer key m
+
+    let resize () =
+        let isize = bucket.Length
+        let nsize = isize * 2
+        let ibmd = calcBitMaskDepth isize
+        let newBucket = Array.zeroCreate<MapTree<'K,'V> []> (nsize)
+        for i in 0 .. isize - 1 do
+            let shrd = bucket.[i]
+            let i2 = higherRange(i,ibmd)
+            if isEmpty bucket.[i] then // special empty case
+                newBucket.[i] <- empty
+                newBucket.[i2] <- empty
+            else // shard needs to be split out amoungst two new shards
+
+                for j in 0 .. ShardSize - 1 do
+                    let m = shrd.[j]
+                    if not (isEmpty m) then
+                        let m1,m0 = MapTree.partition comparer (fun k _ -> (k.GetHashCode() >>> ibmd) &&& 0b1 = 1) m //<<<CHECK
+                        
+                        if not (MapTree.isEmpty m0) then
+                            let mutable shrd = newBucket.[i]
+                            if isEmpty shrd then
+                                shrd <- Array.zeroCreate<_>(ShardSize)
+                                newBucket.[i] <- shrd
+                            shrd.[j] <- m0
+                        
+                        if not (MapTree.isEmpty m1) then
+                            let mutable  shrd = newBucket.[i2]
+                            if isEmpty shrd then
+                                shrd <- Array.zeroCreate<_>(ShardSize)
+                                newBucket.[i2] <- shrd
+                            shrd.[j] <- m1
+
+                // after copying, check if buckets still empty and add empty shard if null
+                if isEmpty newBucket.[i] then newBucket.[i] <- empty
+                if isEmpty newBucket.[i2] then newBucket.[i2] <- empty
+            
+        //now update internal state
+        bucket <- newBucket  /// <<<<<<<<<<<<<<< NOT ANYMORE MUTATE TO NEW DICT
+        bitMaskDepth <- calcBitMaskDepth !countRef
+        bucketBitMask <- calcSubBitMask bitMaskDepth
 
     do  // prevent any out of index errors on non-set shards
         for bi in 0.. bucket.Length - 1 do
@@ -556,54 +497,11 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             bucket.[bi] <- empty
 
     member __.Add(k:'K,v:'V) =
-        if count + 1 > (bucket.Length * ShardSize) then
+        if !countRef + 1 > (bucket.Length * ShardSize * 2) then
             // base array needs resizing
             resizing <- true
-            lock resizeLock (fun () ->
-
-                let isize = bucket.Length
-                let ibmd = calcBitMaskDepth isize
-                let newBucket = Array.zeroCreate<MapTree<'K,'V> []> (isize * 2)
-                let newRIndex = Array.zeroCreate<int> (isize * 2) // <<< todo: change to create -1s so rindex can be checked processing and at end
-                for i in 0 .. isize - 1 do
-                    let shrd = bucket.[i]
-                    let i2 = (i ||| 1 <<< ibmd) >>> 4
-                    if Object.ReferenceEquals(empty,bucket.[i]) then // special empty case
-                        newBucket.[i] <- empty
-                        newBucket.[i2] <- empty
-                    else // shard needs to be split out amoungst two new shards
-
-                        //skip (or impliment with adding empty arrays)
-                        // let ri0, s0 = buffer.Rent()
-                        // newRIndex.[i] <- ri0
-
-                        for j in 0 .. 7 do
-                            let m = shrd.[j]
-                            if not (isEmpty m) then
-                                let m1,m0 = MapTree.partition comparer (fun k _ -> (k.GetHashCode() >>> ibmd) &&& 0b1 = 1) m
-                                
-                                if not (MapTree.isEmpty m0) then
-                                    let mutable shrd = newBucket.[i]
-                                    if isEmpty shrd then
-                                        shrd <- Array.zeroCreate<_>(ShardSize)
-                                        newBucket.[i] <- shrd
-                                    shrd.[j] <- m0
-                                
-                                if not (MapTree.isEmpty m1) then
-                                    let mutable  shrd = newBucket.[i2]
-                                    if isEmpty shrd then
-                                        shrd <- Array.zeroCreate<_>(ShardSize)
-                                        newBucket.[i2] <- shrd
-                                    shrd.[j] <- m1
-
-                        // after copying, check if buckets still empty and add empty shard if null
-                        if isEmpty newBucket.[i] then newBucket.[i] <- empty
-                        if isEmpty newBucket.[i2] then newBucket.[i2] <- empty
-                    
-                //now update internal state
-                bucket <- newBucket  /// <<<<<<<<<<<<<<< NOT ANYMORE MUTATE TO NEW DICT
-                    
-            ) //End of Lock
+            lock resizeLock resize 
+            //End of Lock
             resizing <- false
         
         /// Resize complete at this stage if needed
@@ -611,11 +509,16 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         let bi = bucketIndex(kh,bucketBitMask)
         let si = shardIndex kh
         let shrd = newShard bucket.[bi]
-        bucket.[bi] <- shrd
+        
+        lock bucket.SyncRoot (fun () -> bucket.[bi] <- shrd) 
+        
         let m = shrd.[si]
         if isEmpty m then
             shrd.[si] <- genNewSubMap (k,v)
         else
+            if not(MapTree.containsKey comparer k m) then 
+                Interlocked.Increment(countRef) |> ignore
+            
             shrd.[si] <- MapTree.add comparer k v m
 
     member __.Remove(k:'K) =
@@ -623,17 +526,20 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         let bi = bucketIndex(kh,bucketBitMask)
         let si = shardIndex kh
         let shrd = newShard bucket.[bi]
-        bucket.[bi] <- shrd
+        
+        lock bucket.SyncRoot (fun () -> bucket.[bi] <- shrd )
+
         let m = shrd.[si]
         if isEmpty m then
             raise <| KeyNotFoundException(sprintf "Key:'%A' not found in map so cannot remove" k)
         else
+            Interlocked.Decrement(countRef) |> ignore
             shrd.[si] <- MapTree.remove comparer k m
 
     member __.Copy() =        
         let nBucket = Array.zeroCreate<MapTree<'K,'V>[]>(nBucket.Length)
         Array.Copy(bucket,nBucket,bucket.Length)
-        ShardMap<'K,'V>(count,nBucket)
+        ShardMap<'K,'V>(!countRef,nBucket)
                 
     member x.AddToNew(k:'K,v:'V) =
         let newShardMap = x.Copy()
@@ -660,98 +566,63 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         else
             MapTree.containsKey comparer key m
 
-    // member __.toSeqSlow () = seq {
-    //         for i in 0 .. bucket.Length - 1 do
-    //             for j in 0 .. ShardSize - 1 do
-    //                 let m = bucket.[i].[j]
-    //                 if not(isEmpty m) then
-    //                     for kvp in m -> kvp
-    //     }
+    member __.TryFind(key:'K) =
+        if resizing then
+            lock resizeLock (fun () -> tryFind key)
+        else
+            tryFind key
 
-    member __.toSeq () = 
-        let i = ref (ShardMapIterator(bucket))
-        { new IEnumerator<_> with 
-                  member self.Current = (!i).Current
-              interface System.Collections.IEnumerator with
-                  member self.Current = box (!i).Current
-                  member self.MoveNext() = (!i).MoveNext()
-                  member self.Reset() = i :=  ShardMapIterator(bucket)
-              interface System.IDisposable with 
-                  member self.Dispose() = ()}
-
+    member __.Fold f acc = 
+        let rec go(ls,acc) = 
+            match ls with
+            | [] -> acc
+            | h :: t -> 
+                go(t,MapTree.fold f h acc)
+        go(mapList(), acc)
 
 ////////////////
-    member __.toSeq2 () =
-        let rec collapseLHS stack =
-            match stack with
-            | []                           -> []
-            | MapEmpty             :: rest -> collapseLHS rest
-#if ONE 
-            | MapOne _         :: _ -> stack
-#else
-            | (MapNode(_,_,MapEmpty,MapEmpty,_)) :: _ -> stack
-#endif
-            | (MapNode(k,v,l,r,_)) :: rest -> collapseLHS (l :: MapTree.MapOne (k,v) :: r :: rest)
-      
-        let initStack () =
-            let mutable result = []
-            for bi in 0 .. bucket.Length - 1 do
-                for si in 0 .. ShardSize - 1 do
-                    if not(isEmpty bucket.[bi].[si]) then
-                        result <- bucket.[bi].[si] :: result
-            result
+    member __.toSeq () =
 
-        let fullList = (initStack ())
-          /// invariant: always collapseLHS result 
-        let mutable stack = collapseLHS fullList
-           /// true when Movetail has been called   
-        let mutable started = false
-
-        let notStarted() = raise (new System.InvalidOperationException("Enumeration has not started. Call MoveNext."))
-        let alreadyFinished() = raise (new System.InvalidOperationException("Enumeration already finished."))
+        let mutable stack = mapList ()
+        let mutable current = Unchecked.defaultof<KeyValuePair<_,_>>
 
         { new IEnumerator<_> with 
-              member self.Current = 
-                if started then
-                    match stack with
-#if ONE
-                | MapOne (k,v) :: _ -> new KeyValuePair<_,_>(k,v)
-#else
-                | (MapNode(k,v,MapEmpty,MapEmpty,_)) :: _ -> new KeyValuePair<_,_>(k,v)
-#endif
-                | []            -> alreadyFinished()
-                | _             -> failwith "Please report error: Map iterator, unexpected stack for current"
-                else
-                    notStarted()
+                member self.Current = current
             interface System.Collections.IEnumerator with
                   member self.Current = box self.Current
                   member self.MoveNext() = 
-                    if started then
-                        match stack with
+                    let rec go =                                     
+                        function
+                        | MapEmpty :: rest -> go rest
 #if ONE
-                        | MapOne _ :: rest -> 
+                        | MapOne (k,v) :: rest -> 
+                            current <- new KeyValuePair<_,_>(k,v)
+                            stack <- rest
+                            true
 #else
-                        | (MapNode(_,_,MapEmpty,MapEmpty,_)) :: rest -> 
-#endif
-                            stack <- collapseLHS rest;
-                            not stack.IsEmpty
+                        | (MapNode(k,v,MapEmpty,MapEmpty,_)) :: rest -> 
+                      
+                            current <- new KeyValuePair<_,_>(k,v)
+                            stack <- rest
+                            true
+#endif                        
+                        | (MapNode(k,v,l,r,_)) :: rest ->             
+                            current <- new KeyValuePair<_,_>(k,v)
+                            stack <- l :: r :: rest
+                            true
                         | [] -> false
-                        | _ -> failwith "Please report error: Map iterator, unexpected stack for movenext"
-                    else
-                    // The first call to MoveNext "starts" the enumeration. 
-                    started <- true;  
-                    not stack.IsEmpty
+                    go stack
 
-                  member self.Reset() = stack <- collapseLHS fullList
+                  member self.Reset() = stack <- mapList ()
             interface System.IDisposable with 
-                  member self.Dispose() = ()}
+                  member self.Dispose() = stack <- [] }
 
 
 ////////////////
 
-    member __.Count with get () = count
+    member __.Count = !countRef
 
-    member __.BucketSize with get () = bucket.Length
+    member __.BucketSize = bucket.Length
 
     member __.PrintLayout () =
         let mutable rowCount = 0
@@ -779,21 +650,21 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         printf "Tot {" 
         for j in 0 .. ShardSize - 1 do
             printf " %i |" columnCount.[j]
-        printfn "} = %4i[%5i]" tmapCount count            
+        printfn "} = %4i[%5i]" tmapCount !countRef            
     
 
     interface IEnumerable<KeyValuePair<'K, 'V>> with
-        member s.GetEnumerator() = s.toSeq2 ()
+        member s.GetEnumerator() = s.toSeq()
 
     interface System.Collections.IEnumerable with
-        override s.GetEnumerator() = (s.toSeq2 () :> System.Collections.IEnumerator)
+        override s.GetEnumerator() = (s.toSeq () :> System.Collections.IEnumerator)
 
         
     new(counter:int,items:('K * 'V) seq) =
 
         let comparer = LanguagePrimitives.FastGenericComparer<'Key>
-        let bitdepth = calcBitMaskDepth counter
-        let bucketSize = pow2 bitdepth
+        let bitdepth = (calcBitMaskDepth counter)
+        let bucketSize = pow2 (bitdepth)
         let bucketBitMask = calcSubBitMask bitdepth
         let newBucket = Array.zeroCreate<MapTree<'K,'V> []>(bucketSize)
 
@@ -840,25 +711,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 ///////////////////////////////////////////////
 ///////////////////////////////////////////////
 
-
-
-let emptySM = Unchecked.defaultof<SubMap<string,string>>
-let smt = SubMap<_,_>.FromOne ("jhlkh","poinkjh") emptySM
-smt.Tail
-printfn "%A" smt
-
-let smt1 = smt.Add("poijoihj","vyrctoiuou")  
-printfn "%A" smt1
-smt.Tail
-let smt2 = SubMap<_,_>.FromOne ("dsdfdlkh","poinsfvdsf") smt1
-smt2.Tail
-let smt3 = smt2.Add("asfaposdiufad","ghadfjfksaldjf")
-smt3.Tail
-for v in smt3 do
-    printfn "%A" v
-Object.ReferenceEquals(smt1,smt2.Tail)
-
-//////////////////////////
+let bprint (value:int) = Convert.ToString(value, 2).PadLeft(32, '0')
 
 let smap = new ShardMap<_,_>(numberStrings)
 smap1.GetHashCode()
@@ -905,6 +758,7 @@ for i in 0 .. lookuploops do
         
 ////////////
 let copyloops = 100000
+
 for i in 0 .. copyloops do
     let ndict = Dictionary<_,_>(dict)
     let k,v = "Key1","Value1" 
@@ -941,7 +795,7 @@ for i in 0 .. ittrLoops do
     smap |> Seq.iter (fun kvp -> 
         let k = kvp.Key
         let v = kvp.Value
-        //counter <- counter + 1
+        counter <- counter + 1
         ()
     )
 
@@ -951,7 +805,7 @@ for i in 0 .. ittrLoops do
     bmap |> Seq.iter (fun kvp -> 
         let k = kvp.Key
         let v = kvp.Value
-        //counter <- counter + 1
+        counter <- counter + 1
         ()
     ) 
 
@@ -983,6 +837,8 @@ dict.Count
 
 smap.["Elekta"];;
 
+smap.Fold (fun k v (str,i) -> (v.Substring(0,1) + str,i+1)) ("",0)
 
-#time
-
+calcBitMaskDepth 47 |> bprint
+higherRange(36,5) |> bprint
+36 |> bprint
