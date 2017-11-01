@@ -451,10 +451,13 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             MapTree.tryFind comparer key m
 
     let resize () =
+        lock bucket.SyncRoot (fun () ->
+        printfn "started resize ()"
         let isize = bucket.Length
         let nsize = isize * 2
         let ibmd = calcBitMaskDepth isize
         let newBucket = Array.zeroCreate<MapTree<'K,'V> []> (nsize)
+        printfn "new bucket of %i size created" nsize
         for i in 0 .. isize - 1 do
             let shrd = bucket.[i]
             let i2 = higherRange(i,ibmd)
@@ -483,43 +486,55 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
                             shrd.[j] <- m1
 
                 // after copying, check if buckets still empty and add empty shard if null
-                if isEmpty newBucket.[i] then newBucket.[i] <- empty
+                // if isEmpty newBucket.[i] then newBucket.[i] <- empty
+                // if isEmpty newBucket.[i2] then newBucket.[i2] <- empty
+            for i2 in 0 .. newBucket.Length - 1 do
                 if isEmpty newBucket.[i2] then newBucket.[i2] <- empty
             
         //now update internal state
         bucket <- newBucket  /// <<<<<<<<<<<<<<< NOT ANYMORE MUTATE TO NEW DICT
         bitMaskDepth <- calcBitMaskDepth !countRef
         bucketBitMask <- calcSubBitMask bitMaskDepth
+        printfn "resize now completed"
+        )
 
+    let add(k:'K,v:'V) =
+        printfn "Adding K:%A | V:%A" k v
+        let kh = k.GetHashCode()
+        let bi = bucketIndex(kh,bucketBitMask)
+        let si = shardIndex kh
+        
+        lock bucket.SyncRoot (fun () -> 
+            let shrd = newShard bucket.[bi]
+            bucket.[bi] <- shrd
+            let m = shrd.[si]
+            if isEmpty m then
+                shrd.[si] <- genNewSubMap (k,v)
+            else
+                if not(MapTree.containsKey comparer k m) then 
+                    Interlocked.Increment(countRef) |> ignore
+                
+                shrd.[si] <- MapTree.add comparer k v m
+        ) 
+        
     do  // prevent any out of index errors on non-set shards
         for bi in 0.. bucket.Length - 1 do
         if isEmpty bucket.[bi] then
             bucket.[bi] <- empty
 
     member __.Add(k:'K,v:'V) =
-        if !countRef + 1 > (bucket.Length * ShardSize * 2) then
+        if !countRef + 1 > (bucket.Length * ShardSize) then
+            printfn "!! RESIZING!! count reached %i on bucket size: %i (capacity: %i) Key:%A" !countRef bucket.Length (bucket.Length * ShardSize) k
             // base array needs resizing
-            resizing <- true
+            //resizing <- true
             lock resizeLock resize 
             //End of Lock
-            resizing <- false
+            //resizing <- false
+        
+        lock resizeLock (fun () -> add(k,v))
         
         /// Resize complete at this stage if needed
-        let kh = k.GetHashCode()
-        let bi = bucketIndex(kh,bucketBitMask)
-        let si = shardIndex kh
-        let shrd = newShard bucket.[bi]
-        
-        lock bucket.SyncRoot (fun () -> bucket.[bi] <- shrd) 
-        
-        let m = shrd.[si]
-        if isEmpty m then
-            shrd.[si] <- genNewSubMap (k,v)
-        else
-            if not(MapTree.containsKey comparer k m) then 
-                Interlocked.Increment(countRef) |> ignore
-            
-            shrd.[si] <- MapTree.add comparer k v m
+
 
     member __.Remove(k:'K) =
         let kh = k.GetHashCode()
@@ -634,23 +649,23 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             rowCount <- 0
             rmapCount <- 0
 
-            printf "%3i {" i
+            printf "%4i {" i
             for j in 0 .. ShardSize - 1 do
                 let m = bucket.[i].[j]
                 if isEmpty m then
-                    printf " __ |"
+                    printf " ___ |"
                 else
                     tmapCount <- tmapCount + 1
                     rmapCount <- rmapCount + 1
                     columnCount.[i] <- columnCount.[i] + (MapTree.count m)
                     rowCount <- rowCount + (MapTree.count m)
-                    printf " %2i |" (MapTree.count m)
-            printfn "} = %4i[%5i]"rmapCount rowCount
+                    printf " %3i |" (MapTree.count m)
+            printfn "} = %5i[%6i]"rmapCount rowCount
         
-        printf "Tot {" 
+        printf "Total{" 
         for j in 0 .. ShardSize - 1 do
-            printf " %i |" columnCount.[j]
-        printfn "} = %4i[%5i]" tmapCount !countRef            
+            printf " %3i |" columnCount.[j]
+        printfn "} = %5i[%6i]" tmapCount !countRef            
     
 
     interface IEnumerable<KeyValuePair<'K, 'V>> with
@@ -714,6 +729,13 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 let bprint (value:int) = Convert.ToString(value, 2).PadLeft(32, '0')
 
 let smap = new ShardMap<_,_>(numberStrings)
+
+for (k,v) in sample2 do
+    smap.Add(k,v)
+
+#time
+let smap = new ShardMap<_,_>(bigData)
+
 smap1.GetHashCode()
 let smap1 = smap.AddToNew("alkdfjas","fadfdf")
 let bmap = Map<_,_>(numberStrings)
@@ -728,7 +750,7 @@ List.length sml
 2 <<< (11-5)
 
 let dict = Dictionary<string,string>()
-for (k,v) in numberStrings do
+for (k,v) in bigData do
     dict.Add(k,v)
 
 //////////////
@@ -746,6 +768,11 @@ let lookuploops = 10000
 for i in 0 .. lookuploops do
     for (k,v) in numberStrings do
         if smap.[k] <> v then printfn "ERROR ON KEY MATCH: %A" k
+
+for i in 0 .. lookuploops do
+    for (k,v) in sample2 do
+        if smap.[k] <> v then printfn "ERROR ON KEY MATCH: %A" k
+////////////////////////////////////
 
 for i in 0 .. lookuploops do
     for (k,v) in numberStrings do
@@ -795,7 +822,7 @@ for i in 0 .. ittrLoops do
     smap |> Seq.iter (fun kvp -> 
         let k = kvp.Key
         let v = kvp.Value
-        counter <- counter + 1
+        // counter <- counter + 1
         ()
     )
 
@@ -805,7 +832,7 @@ for i in 0 .. ittrLoops do
     bmap |> Seq.iter (fun kvp -> 
         let k = kvp.Key
         let v = kvp.Value
-        counter <- counter + 1
+        // counter <- counter + 1
         ()
     ) 
 
