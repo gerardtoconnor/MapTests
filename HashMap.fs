@@ -456,15 +456,15 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 
     let resize () =
 
-        printfn "started resize ()"
+        //printfn "started resize ()"
         let isize = bucket.Length
         let nsize = isize * 2
         let ibmd = bitMaskDepth
         
-        printfn "ibmd : %i / isize: %i" ibmd isize
+        //printfn "ibmd : %i / isize: %i" ibmd isize
         
         let newBucket = Array.zeroCreate<MapTree<'K,'V> []> (nsize)
-        printfn "new bucket of %i size created" nsize
+        //printfn "new bucket of %i size created" nsize
         
         Tasks.Parallel.For(0, bucket.Length, 
             fun i0 ->
@@ -483,8 +483,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
                     for j in 0 .. ShardSize - 1 do
                         let m = oshrd.[j]
                         if not(isEmpty m) then
-                            let m1,m0 = 
-                                MapTree.partition comparer (fun k _ -> ((k.GetHashCode() >>> (ibmd )) &&& 0b1) = 1) m //<<<CHECK
+                            let m1,m0 = MapTree.partition comparer (fun k _ -> ((k.GetHashCode() >>> (ibmd )) &&& 0b1) = 1) m //<<<CHECK
                             
                             if not (MapTree.isEmpty m0) then
                                 let mutable shrd0 = newBucket.[i0]
@@ -513,7 +512,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         bitMaskDepth <- calcBitMaskDepth !countRef
         bucketBitMask <- calcSubBitMask bitMaskDepth
         capacity <- (newBucket.Length * ShardSize) - 1
-        printfn "finished resizing operations"
+        //printfn "finished resizing operations"
 
 
     let add(k:'K,v:'V) =
@@ -705,7 +704,16 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     interface System.Collections.IEnumerable with
         override s.GetEnumerator() = (s.toSeq () :> System.Collections.IEnumerator)
 
-        
+    static member Union (maps:ShardMap<_,_> seq) =
+        let mutable cache = []
+        let mutable counter = 0
+        let mutable maxBucket = 0 
+        for map in maps do
+            counter <- counter + 1
+            if map.BucketSize > maxBucket then maxBucket <- map.BucketSize 
+            cache <- map :: cache
+
+
     new(counter:int,items:('K * 'V) seq) =
 
         let comparer = LanguagePrimitives.FastGenericComparer<'Key>
@@ -932,3 +940,5 @@ for i in 0 .. 10 do
 
 let higherRange (index:int,bitdepth:int) = (index ||| (1 <<< (bitdepth - 4)))
 higherRange(43,10) |> bprint
+
+let v = 0b00001
