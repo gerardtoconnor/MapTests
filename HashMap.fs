@@ -375,11 +375,11 @@ let private ShardSize = 16
 ////////////////////////////
 
 //let calcBitMaskDepth itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2))) //todo:make private
-let inline calcBitMaskDepth i =
+let inline calcBitMaskDepth itemCount =
     let rec go s d =
         if s = 0 then d
         else go (s >>> 1) (d + 1)
-    go i 0
+    go itemCount 0
 let inline private pow2 (i:int) = 2 <<< (i - 5) // todo 4 is shard size 2^n
 let inline calcSubBitMask (bitDepth:int) = ~~~(-1 <<< (bitDepth))
 
@@ -392,7 +392,7 @@ let inline private bucketIndex (keyHash:int,subBitMask:int) = (keyHash &&& subBi
 let inline private shardIndex (keyHash:int) = keyHash &&& 0b1111
 let inline private isEmpty v = Object.ReferenceEquals(null,v)
 
-let inline private higherRange (index:int,bitdepth:int) = (index ||| (1 <<< bitdepth)) >>> 4
+let inline private higherRange (index:int,bitdepth:int) = (index ||| (1 <<< (bitdepth - 4)))
 
 /// Shard Map
 ////////////////////////////
@@ -450,40 +450,56 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         else
             MapTree.tryFind comparer key m
 
+    let bprint (v:int) = Convert.ToString(v, 2)
+
     let resize () =
-        lock bucket.SyncRoot (fun () ->
+
         printfn "started resize ()"
         let isize = bucket.Length
         let nsize = isize * 2
-        let ibmd = calcBitMaskDepth isize
+        let ibmd = bitMaskDepth
+        
+        printfn "ibmd : %i / isize: %i" ibmd isize
+        
         let newBucket = Array.zeroCreate<MapTree<'K,'V> []> (nsize)
         printfn "new bucket of %i size created" nsize
-        for i in 0 .. isize - 1 do
+        
+        for i in 0 .. isize - 1 do // for each shard in old bucket
             let shrd = bucket.[i]
             let i2 = higherRange(i,ibmd)
-            if isEmpty bucket.[i] then // special empty case
+            printfn "for range i:%i {%s}, higher range i2:%i {%s}" i (bprint i) i2 (bprint i2)
+            if Object.ReferenceEquals(bucket.[i],empty) then // special empty shard case
                 newBucket.[i] <- empty
                 newBucket.[i2] <- empty
             else // shard needs to be split out amoungst two new shards
 
                 for j in 0 .. ShardSize - 1 do
                     let m = shrd.[j]
-                    if not (isEmpty m) then
-                        let m1,m0 = MapTree.partition comparer (fun k _ -> (k.GetHashCode() >>> ibmd) &&& 0b1 = 1) m //<<<CHECK
-                        
+                    if not(isEmpty m) then
+                        let m1,m0 = 
+                            MapTree.partition comparer (fun k _ -> 
+                                let hk = k.GetHashCode()
+                                let sft = (hk >>> (ibmd ))
+                                //printfn "partition >> hk:%s sft:%s | ibmd:%i" (bprint hk) (bprint sft) ibmd
+                                (sft &&& 0b1) = 1
+                            ) m //<<<CHECK
+                        //printfn "Partioned m(%i) >> m0(%i) & m1(%i) at [%i][%i] | [%i][%i]" (MapTree.count m) (MapTree.count m0) (MapTree.count m1) i j i2 j
+
                         if not (MapTree.isEmpty m0) then
-                            let mutable shrd = newBucket.[i]
-                            if isEmpty shrd then
-                                shrd <- Array.zeroCreate<_>(ShardSize)
-                                newBucket.[i] <- shrd
-                            shrd.[j] <- m0
+                            //printfn "Partioned m(%i) >> m0(%i) at [%i][%i] >> [%i][%i]" (MapTree.count m) (MapTree.count m0) i j i j
+                            let mutable shrd0 = newBucket.[i]
+                            if isEmpty shrd0 then
+                                shrd0 <- Array.zeroCreate<_>(ShardSize)
+                                newBucket.[i] <- shrd0
+                            shrd0.[j] <- m0
                         
                         if not (MapTree.isEmpty m1) then
-                            let mutable  shrd = newBucket.[i2]
-                            if isEmpty shrd then
-                                shrd <- Array.zeroCreate<_>(ShardSize)
-                                newBucket.[i2] <- shrd
-                            shrd.[j] <- m1
+                            //printfn "Partioned m(%i) >> m1(%i) at [%i][%i] >> [%i][%i]" (MapTree.count m) (MapTree.count m1) i j i2 j
+                            let mutable shrd1 = newBucket.[i2]
+                            if isEmpty shrd1 then
+                                shrd1 <- Array.zeroCreate<_>(ShardSize)
+                                newBucket.[i2] <- shrd1
+                            shrd1.[j] <- m1                      
 
                 // after copying, check if buckets still empty and add empty shard if null
                 // if isEmpty newBucket.[i] then newBucket.[i] <- empty
@@ -492,30 +508,27 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
                 if isEmpty newBucket.[i2] then newBucket.[i2] <- empty
             
         //now update internal state
-        bucket <- newBucket  /// <<<<<<<<<<<<<<< NOT ANYMORE MUTATE TO NEW DICT
+        lock bucket.SyncRoot (fun () -> bucket <- newBucket ) // ??? needed with resize lock already in place?
         bitMaskDepth <- calcBitMaskDepth !countRef
         bucketBitMask <- calcSubBitMask bitMaskDepth
-        printfn "resize now completed"
-        )
+
 
     let add(k:'K,v:'V) =
-        printfn "Adding K:%A | V:%A" k v
         let kh = k.GetHashCode()
         let bi = bucketIndex(kh,bucketBitMask)
         let si = shardIndex kh
-        
-        lock bucket.SyncRoot (fun () -> 
-            let shrd = newShard bucket.[bi]
-            bucket.[bi] <- shrd
-            let m = shrd.[si]
-            if isEmpty m then
-                shrd.[si] <- genNewSubMap (k,v)
-            else
-                if not(MapTree.containsKey comparer k m) then 
-                    Interlocked.Increment(countRef) |> ignore
-                
-                shrd.[si] <- MapTree.add comparer k v m
-        ) 
+        let shrd = newShard bucket.[bi]
+
+        lock bucket.SyncRoot (fun () -> bucket.[bi] <- shrd)
+
+        let m = shrd.[si]
+        if isEmpty m then
+            shrd.[si] <- genNewSubMap (k,v)
+        else
+            if not(MapTree.containsKey comparer k m) then 
+                Interlocked.Increment(countRef) |> ignore
+            
+            shrd.[si] <- MapTree.add comparer k v m 
         
     do  // prevent any out of index errors on non-set shards
         for bi in 0.. bucket.Length - 1 do
@@ -524,14 +537,17 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 
     member __.Add(k:'K,v:'V) =
         if !countRef + 1 > (bucket.Length * ShardSize) then
-            printfn "!! RESIZING!! count reached %i on bucket size: %i (capacity: %i) Key:%A" !countRef bucket.Length (bucket.Length * ShardSize) k
             // base array needs resizing
-            //resizing <- true
+            resizing <- true
             lock resizeLock resize 
             //End of Lock
-            //resizing <- false
+            resizing <- false
         
-        lock resizeLock (fun () -> add(k,v))
+        if resizing then
+            lock resizeLock (fun () -> add(k,v))
+        else
+            add(k,v)
+
         
         /// Resize complete at this stage if needed
 
@@ -660,7 +676,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
                     columnCount.[i] <- columnCount.[i] + (MapTree.count m)
                     rowCount <- rowCount + (MapTree.count m)
                     printf " %3i |" (MapTree.count m)
-            printfn "} = %5i[%6i]"rmapCount rowCount
+            printfn "} = %5i[%6i]" rmapCount rowCount
         
         printf "Total{" 
         for j in 0 .. ShardSize - 1 do
@@ -869,3 +885,21 @@ smap.Fold (fun k v (str,i) -> (v.Substring(0,1) + str,i+1)) ("",0)
 calcBitMaskDepth 47 |> bprint
 higherRange(36,5) |> bprint
 36 |> bprint
+
+for i in 0 .. 10 do
+    let k,_ = sample2.[i]
+    let hk = k.GetHashCode()
+    let bmd = 10
+    let sft = ((hk >>> bmd + 1) &&& 0b1)
+    let subBitMask = calcSubBitMask bmd    
+    let si = hk &&& 0b1111
+    let bi = (hk &&& subBitMask) >>> 4
+    let sib = (bprint si).Substring(28,4)
+    let bib = (bprint bi).Substring(32 - bmd + 4,bmd - 4)
+    let hkb = bprint hk
+    let sftb = sft = 1
+    printfn "%A:hk{%11i} sft{%i} hk{%s} msk{%s} si{%3i:%s} bi{%3i:%s} >%b" k hk sft hkb (hkb.Substring(hkb.Length - bmd - 2,bmd + 1)) si sib bi bib sftb
+
+
+let higherRange (index:int,bitdepth:int) = (index ||| (1 <<< (bitdepth - 4)))
+higherRange(43,10) |> bprint
