@@ -704,7 +704,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     interface System.Collections.IEnumerable with
         override s.GetEnumerator() = (s.toSeq () :> System.Collections.IEnumerator)
 
-    static member Union (maps:ShardMap<_,_> seq) =
+    static member Union (unionf:seq<'V> -> 'b) (maps:ShardMap<'K,'V> seq) : ShardMap<'K,'b> =
         let mutable cache = []
         let mutable counter = 0
         let mutable maxBucket = 0 
@@ -942,3 +942,40 @@ let higherRange (index:int,bitdepth:int) = (index ||| (1 <<< (bitdepth - 4)))
 higherRange(43,10) |> bprint
 
 let v = 0b00001
+let short (sft:int) = 1s <<< sft
+short 3
+let print16 (srt:int16)  = System.Convert.ToString(srt,2)
+short 15 |> print16
+
+
+let union unionf (ms: Map<string,_> seq) = 
+    seq { for m in ms do yield! m } 
+       |> Seq.groupBy (fun (KeyValue(k,_v)) -> k) 
+       |> Seq.map (fun (k,es) -> (k,unionf (Seq.map (fun (KeyValue(_k,v)) -> v) es))) 
+       |> Map.ofSeq
+#time
+
+type st =
+    struct
+    val X: int
+    val Y: int
+    end
+    new(x,y) = {X=x;Y=y}
+
+type cl(x:int,y:int) =
+    member val X = x
+    member val Y = y
+
+let rec go (arg:st) i = 
+    let tot = arg.X + arg.Y
+    let v = st(123,456)
+    if i < 100000000 then
+        go v (i + 1)
+go (st(123,456)) 0
+        
+let rec go (arg:cl) i = 
+    let tot = arg.X + arg.Y
+    let v = cl(345,456)
+    if i < 100000000 then
+        go v (i + 1)
+go (cl(123,456)) 0
