@@ -404,20 +404,14 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     //let mutable subMapHead = ihead
     let comparer = LanguagePrimitives.FastGenericComparer<'Key>
 
-    let genNewSubMap kvt = MapTree.MapOne kvt
-
-    let newShard oary = 
-        let nary = Array.zeroCreate<MapTree<'K,'V>>(ShardSize)
-        Array.Copy(oary,nary,ShardSize)
-        nary
-
-    let mutable bucket = nBucket 
+    let mutable bucket = nBucket
+    let countRef = ref icount
 
     //Lock variables
-    let mutable resizing = false
-    let resizeLock = obj()
+    ///////////////////////////////////
+    let mutable resizing = false // lightweight single op read var for checking state
+    let resizeLock = obj()  // lock for when internal bucket array needs to resize
 
-    let countRef = ref icount
 
     //let calcBitMaskDepth itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2)))
     let mutable bitMaskDepth = (calcBitMaskDepth icount)
@@ -425,15 +419,29 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     let mutable bucketBitMask = calcSubBitMask bitMaskDepth
 
     let mutable capacity = (bucket.Length * ShardSize) - 1
-    ///provides index in local bucket of shard
+    
+    let mutable mapCache = []
+    
+    /// Internal Funtions
+    /////////////////////////////////////////////////
+
+    let newShard oary = 
+        let nary = Array.zeroCreate<MapTree<'K,'V>>(ShardSize)
+        Array.Copy(oary,nary,ShardSize)
+        nary
 
     let mapList () =
-        let mutable result = []
-        for bi in 0 .. bucket.Length - 1 do
-            for si in 0 .. ShardSize - 1 do
-                if not(isEmpty bucket.[bi].[si]) then
-                    result <- bucket.[bi].[si] :: result
-        result
+        match mapCache with
+        | [] -> 
+            let mutable result = []
+            for bi in 0 .. bucket.Length - 1 do
+                for si in 0 .. ShardSize - 1 do
+                    if not(isEmpty bucket.[bi].[si]) then
+                        result <- bucket.[bi].[si] :: result
+            mapCache <- result
+            result                                 
+        | result -> 
+            result
 
     let getMap (key:'K) =
         let kh = key.GetHashCode()
@@ -452,7 +460,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         else
             MapTree.tryFind comparer key m
 
-    let bprint (v:int) = Convert.ToString(v, 2)
+    let bprint (v:int) = Convert.ToString(v, 2)  // todo: remove, only needed for debugging
 
     let resize () =
 
@@ -523,34 +531,64 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 
         lock bucket.SyncRoot (fun () -> bucket.[bi] <- shrd)
 
+        mapCache <- []  // clear the mapCache, next call to seq can rebuild with new map refs
+
         let m = shrd.[si]
         if isEmpty m then
-            shrd.[si] <- genNewSubMap (k,v)
+            shrd.[si] <- MapTree.MapOne (k,v)
             countRef := Interlocked.Increment(countRef)
         else
             if not(MapTree.containsKey comparer k m) then 
                 countRef := Interlocked.Increment(countRef)
             
             shrd.[si] <- MapTree.add comparer k v m
+
+    let remove(k:'K) =
+        let kh = k.GetHashCode()
+        let bi = bucketIndex(kh,bucketBitMask)
+        let si = shardIndex kh
+        let shrd = newShard bucket.[bi]
+        
+        lock bucket.SyncRoot (fun () -> bucket.[bi] <- shrd )
+
+        mapCache <- []  // clear the mapCache, next call to seq can rebuild with new map refs
+
+        let m = shrd.[si]
+        if isEmpty m then
+            raise <| KeyNotFoundException(sprintf "Key:'%A' not found in map so cannot remove" k)
+        else
+            Interlocked.Decrement(countRef) |> ignore
+            shrd.[si] <- MapTree.remove comparer k m
+
+
+    let mapFold (f:MapTree<'K,'V> -> 'S -> 'S) (state:'S) =
+        let rec go(ls,acc) = 
+            match ls with
+            | [] -> acc
+            | h :: t -> 
+                go(t,f h acc)
+        go(mapList() , state)
+
+    let transpose (fn:MapTree<'K,'V> -> MapTree<'K,'T>) =
+        let nBucket = Array.zeroCreate<MapTree<'K,'T> []>(bucket.Length)
+        for bi in 0 .. bucket.Length - 1 do
+            for si in 0 .. ShardSize - 1 do
+                if not(isEmpty bucket.[bi].[si]) then
+                    if isEmpty nBucket.[bi] then nBucket.[bi] <- Array.zeroCreate<MapTree<'K,'T>>(ShardSize)
+                    nBucket.[bi].[si] <- fn bucket.[bi].[si]
+        ShardMap<'K,'T>(!countRef,nBucket)
+
+    /////////////////////////////////////////////////////////////
+    /// Constructor operation to ensure no null array references
+    /////////////////////////////////////////////////////////////
         
     do  // prevent any out of index errors on non-set shards
         for bi in 0.. bucket.Length - 1 do
         if isEmpty bucket.[bi] then
             bucket.[bi] <- empty
 
-    member __.Add(k:'K,v:'V) =
-        // lock resizeLock (fun () ->
-            
-        //     if !countRef + 1 > (bucket.Length * ShardSize) then
-        //     // base array needs resizing
-        //         resizing <- true
-        //         resize()
-        //         resizing <- false
-        //     )
-        // add(k,v)        
-        
-
-        
+    member __.Add(k:'K,v:'V) =     
+                
         if resizing then
             lock resizeLock (fun () -> add(k,v))
         else
@@ -562,24 +600,12 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
                 resizing <- false
             add(k,v)
 
-        
-        /// Resize complete at this stage if needed
-
-
     member __.Remove(k:'K) =
-        let kh = k.GetHashCode()
-        let bi = bucketIndex(kh,bucketBitMask)
-        let si = shardIndex kh
-        let shrd = newShard bucket.[bi]
-        
-        lock bucket.SyncRoot (fun () -> bucket.[bi] <- shrd )
-
-        let m = shrd.[si]
-        if isEmpty m then
-            raise <| KeyNotFoundException(sprintf "Key:'%A' not found in map so cannot remove" k)
+        if resizing then
+            lock resizeLock (fun () -> remove(k))
         else
-            Interlocked.Decrement(countRef) |> ignore
-            shrd.[si] <- MapTree.remove comparer k m
+            remove(k)
+
 
     member __.Copy() =        
         let newbucket = Array.zeroCreate<MapTree<'K,'V>[]>(bucket.Length)
@@ -617,13 +643,19 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         else
             tryFind key
 
-    member __.Fold f acc = 
-        let rec go(ls,acc) = 
-            match ls with
-            | [] -> acc
-            | h :: t -> 
-                go(t,MapTree.fold f h acc)
-        go(mapList(), acc)
+
+    member __.Fold (foldFn:'K -> 'V -> 'S -> 'S) (istate:'S) = mapFold (fun m acc -> MapTree.fold foldFn m acc) istate
+
+    member __.Partition (predicate:'K -> 'V -> bool) = mapFold (fun m acc -> MapTree.partitionAux comparer predicate m acc) (MapEmpty,MapEmpty)
+
+    member __.Map (mapFn:'V -> 'T) : ShardMap<'K,'T> = transpose (MapTree.map mapFn)
+        // let nBucket = Array.zeroCreate<MapTree<'K,'T> []>(bucket.Length)
+        // for bi in 0 .. bucket.Length - 1 do
+        //     for si in 0 .. ShardSize - 1 do
+        //         if not(isEmpty bucket.[bi].[si]) then
+        //             if isEmpty nBucket.[bi] then nBucket.[bi] <- Array.zeroCreate<MapTree<'K,'T>>(ShardSize)
+        //             nBucket.[bi].[si] <- MapTree.map mapFn bucket.[bi].[si]
+        // ShardMap<'K,'T>(!countRef,nBucket)                
 
 ////////////////
     member __.toSeq () =
@@ -668,6 +700,8 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     member __.Count = !countRef
 
     member __.BucketSize = bucket.Length
+
+    member __.MapList = mapList()
 
     member __.PrintLayout () =
         let mutable rowCount = 0
@@ -768,6 +802,15 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 let bprint (value:int) = Convert.ToString(value, 2).PadLeft(32, '0')
 
 let smap = new ShardMap<_,_>(numberStrings)
+
+let nmap = smap.Map int
+nmap.["98549420"]
+//    ("98549420","1618963");
+
+#time
+for i in  0 .. 10000 do
+    let ml = smap.MapList
+    ()
 
 Tasks.Parallel.For(0,sample2.Length, fun i ->
     smap.Add sample2.[i]
