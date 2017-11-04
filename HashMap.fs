@@ -1,11 +1,5 @@
 module HashMap
 
-open MapOld
-open SampleData
-
-#if INTERACTIVE
-    #time
-#endif
 
 #nowarn "51"
 #nowarn "69" // interface implementations in augmentations
@@ -29,7 +23,7 @@ open System.Collections.Generic
 //[<CompilationRepresentation(CompilationRepresentationFlags.UseNullAsTrueValue)>]
 [<NoEquality; NoComparison>]
 type MapTree<'Key,'T> = 
-    | MapEmpty 
+    | MapEmpty
     | MapOne of 'Key * 'T
     | MapNode of 'Key * 'T * MapTree<'Key,'T> *  MapTree<'Key,'T> * int
 
@@ -39,7 +33,7 @@ module MapTree =
 
         let rec sizeAux acc m = 
             match m with  
-            | MapEmpty -> acc
+            | MapEmpty -> acc       
             | MapOne _ -> acc + 1
             | MapNode(_,_,l,r,_) -> sizeAux (sizeAux (acc+1) l) r 
 
@@ -82,7 +76,7 @@ module MapTree =
         let empty = MapEmpty 
 
         let height  = function
-          | MapEmpty -> 0
+          | MapEmpty -> 0      
           | MapOne _ -> 1
           | MapNode(_,_,_,_,h) -> h
 
@@ -133,7 +127,7 @@ module MapTree =
 
         let rec add (comparer: IComparer<'Value>) k v m = 
             match m with 
-            | MapEmpty -> MapOne(k,v)
+            | MapEmpty -> MapOne(k,v)       
             | MapOne(k2,_) -> 
                 let c = comparer.Compare(k,k2) 
                 if c < 0   then MapNode (k,v,MapEmpty,m,2)
@@ -568,7 +562,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 
         let m = shrd.[si]
         if isEmpty m then
-            shrd.[si] <- MapTree.MapOne (k,v)
+            shrd.[si] <- MapOne (k,v)
             countRef := Interlocked.Increment(countRef)
         else
             if not(MapTree.mem comparer k m) then 
@@ -601,6 +595,36 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             | h :: t -> 
                 go(t,f h acc)
         go(mapList() , state)
+
+    let mapFold2 (f:'S -> 'K -> 'V -> 'S) (state:'S) =
+        let final = Unchecked.defaultof<'S>
+        let results = Array.zeroCreate<'S>(bucket.Length)
+        let rlock = new obj()
+        Tasks.Parallel.ForEach(
+            bucket,
+            fun () -> state,
+            (fun (shrd,_,pr) ->  
+                let mutable lstate = pr
+                for si in 0 .. ShardSize - 1 do
+                    if not (isEmpty shrd.[si]) then
+                        lstate <- MapTree.fold f shrd.[si]
+                lstate
+            ),
+            fun lr -> lock rlock (fun () -> 
+                if final = Unchecked.defaultof<'S> then 
+                    final <- lr
+                else
+
+                     )
+            )
+
+        let rec go(ls,acc) = 
+            match ls with
+            | [] -> acc
+            | h :: t -> 
+                go(t,f h acc)
+        go(mapList() , state)
+    
 
     let transpose (fn:MapTree<'K,'V> -> MapTree<'K,'T>) =
         let nBucket = Array.zeroCreate<Shard<'K,'T>>(bucket.Length)
@@ -720,24 +744,17 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
                   member self.MoveNext() = 
                     let rec go =                                     
                         function
+                        | [] -> false
                         | MapEmpty :: rest -> go rest
-#if ONE
                         | MapOne (k,v) :: rest -> 
                             current <- new KeyValuePair<_,_>(k,v)
                             stack <- rest
-                            true
-#else
-                        | (MapNode(k,v,MapEmpty,MapEmpty,_)) :: rest -> 
-                      
-                            current <- new KeyValuePair<_,_>(k,v)
-                            stack <- rest
-                            true
-#endif                        
+                            true                   
                         | (MapNode(k,v,l,r,_)) :: rest ->             
                             current <- new KeyValuePair<_,_>(k,v)
                             stack <- l :: r :: rest
                             true
-                        | [] -> false
+
                     go stack
 
                   member self.Reset() = stack <- mapList ()
@@ -796,7 +813,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             counter <- counter + 1
             if map.BucketSize > maxBucket then maxBucket <- map.BucketSize 
             cache <- map :: cache
-
+        failwith "Not implimented"
 
     new(counter:int,items:('K * 'V) seq) =
 
@@ -878,7 +895,10 @@ let smap = new ShardMap<_,_>(bigData)
 
 smap1.GetHashCode()
 let smap1 = smap.AddToNew("alkdfjas","fadfdf")
+
 let bmap = Map<_,_>(numberStrings)
+
+#time
 
 for i in 0 .. 1000 do
     let nsmap = smap.Map int
