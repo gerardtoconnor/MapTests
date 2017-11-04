@@ -30,326 +30,348 @@ open System.Collections.Generic
 [<NoEquality; NoComparison>]
 type MapTree<'Key,'T> = 
     | MapEmpty 
-#if ONE 
     | MapOne of 'Key * 'T
-#endif
     | MapNode of 'Key * 'T * MapTree<'Key,'T> *  MapTree<'Key,'T> * int
 
 
 [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
 module MapTree = 
 
-    let empty = MapEmpty 
+        let rec sizeAux acc m = 
+            match m with  
+            | MapEmpty -> acc
+            | MapOne _ -> acc + 1
+            | MapNode(_,_,l,r,_) -> sizeAux (sizeAux (acc+1) l) r 
 
-    let inline height x  = 
-      match x with 
-      | MapEmpty -> 0
-#if ONE 
-      | MapOne _ -> 1
-#endif
-      | MapNode(_,_,_,_,h) -> h
+        let size x = sizeAux 0 x
 
-    let inline isEmpty m = 
-        match m with 
-        | MapEmpty -> true
-        | _ -> false
 
-    let inline mk l k v r = 
-#if ONE 
-        match l,r with 
-        | MapEmpty,MapEmpty -> MapOne(k,v)
-        | _ -> 
-#endif
-            let hl = height l 
-            let hr = height r 
-            let m = if hl < hr then hr else hl 
-            MapNode(k,v,l,r,m+1)
+    #if TRACE_SETS_AND_MAPS
+        let mutable traceCount = 0
+        let mutable numOnes = 0
+        let mutable numNodes = 0
+        let mutable numAdds = 0
+        let mutable numRemoves = 0
+        let mutable numLookups = 0
+        let mutable numUnions = 0
+        let mutable totalSizeOnNodeCreation = 0.0
+        let mutable totalSizeOnMapAdd = 0.0
+        let mutable totalSizeOnMapLookup = 0.0
+        let mutable largestMapSize = 0
+        let mutable largestMapStackTrace = Unchecked.defaultof<_>
+        let report() = 
+           traceCount <- traceCount + 1 
+           if traceCount % 1000000 = 0 then 
+               System.Console.WriteLine("#MapOne = {0}, #MapNode = {1}, #Add = {2}, #Remove = {3}, #Unions = {4}, #Lookups = {5}, avMapTreeSizeOnNodeCreation = {6}, avMapSizeOnCreation = {7}, avMapSizeOnLookup = {8}",numOnes,numNodes,numAdds,numRemoves,numUnions,numLookups,(totalSizeOnNodeCreation / float (numNodes + numOnes)),(totalSizeOnMapAdd / float numAdds),(totalSizeOnMapLookup / float numLookups))
+               System.Console.WriteLine("#largestMapSize = {0}, largestMapStackTrace = {1}",largestMapSize, largestMapStackTrace)
 
-    let rebalance t1 k v t2 =
-        let t1h = height t1
-        let t2h = height t2
-        if t2h > t1h + 2 then // right is heavier than left 
-            match t2 with 
-            | MapNode(t2k,t2v,t2l,t2r,_) -> 
-               // one of the nodes must have height > height t1 + 1 
-               if height t2l > t1h + 1 then  // balance left: combination 
-                 match t2l with 
-                 | MapNode(t2lk,t2lv,t2ll,t2lr,_) ->
-                    mk (mk t1 k v t2ll) t2lk t2lv (mk t2lr t2k t2v t2r) 
-                 | _ -> failwith "rebalance"
-               else // rotate left 
-                 mk (mk t1 k v t2l) t2k t2v t2r
-            | _ -> failwith "rebalance"
-        else
-            if t1h > t2h + 2 then // left is heavier than right 
-              match t1 with 
-              | MapNode(t1k,t1v,t1l,t1r,_) -> 
-                // one of the nodes must have height > height t2 + 1 
-                  if height t1r > t2h + 1 then 
-                  // balance right: combination 
-                    match t1r with 
-                    | MapNode(t1rk,t1rv,t1rl,t1rr,_) ->
-                        mk (mk t1l t1k t1v t1rl) t1rk t1rv (mk t1rr k v t2)
-                    | _ -> failwith "rebalance"
-                  else
-                    mk t1l t1k t1v (mk t1r k v t2)
-              | _ -> failwith "rebalance"
-            else mk t1 k v t2
+        let MapOne n = 
+            report(); 
+            numOnes <- numOnes + 1; 
+            totalSizeOnNodeCreation <- totalSizeOnNodeCreation + 1.0; 
+            MapTree.MapOne n
 
-    let rec sizeAux acc m = 
-        match m with  
-        | MapEmpty -> acc
-#if ONE 
-        | MapOne _ -> acc + 1
-#endif
-        | MapNode(_,_,l,r,_) -> sizeAux (sizeAux (acc+1) l) r 
+        let MapNode (x,l,v,r,h) = 
+            report(); 
+            numNodes <- numNodes + 1; 
+            let n = MapTree.MapNode(x,l,v,r,h)
+            totalSizeOnNodeCreation <- totalSizeOnNodeCreation + float (size n); 
+            n
+    #endif
 
-#if ONE 
-#else
-    let MapOne(k,v) = MapNode(k,v,MapEmpty,MapEmpty,1)
-#endif
-    
-    let count x = sizeAux 0 x
+        let empty = MapEmpty 
 
-    let rec add (comparer: IComparer<'T>) k v m = 
-        match m with 
-        | MapEmpty -> MapOne(k,v)
-#if ONE 
-        | MapOne(k2,v2) -> 
-            let c = comparer.Compare(k,k2) 
-            if c < 0   then MapNode (k,v,MapEmpty,m,2)
-            elif c = 0 then MapOne(k,v)
-            else            MapNode (k,v,m,MapEmpty,2)
-#endif
-        | MapNode(k2,v2,l,r,h) -> 
-            let c = comparer.Compare(k,k2) 
-            if c < 0 then rebalance (add comparer k v l) k2 v2 r
-            elif c = 0 then MapNode(k,v,l,r,h)
-            else rebalance l k2 v2 (add comparer k v r) 
+        let height  = function
+          | MapEmpty -> 0
+          | MapOne _ -> 1
+          | MapNode(_,_,_,_,h) -> h
 
-    let indexNotFound() = raise (new System.Collections.Generic.KeyNotFoundException("An index satisfying the predicate was not found in the collection"))
+        let isEmpty m = 
+            match m with 
+            | MapEmpty -> true
+            | _ -> false
 
-    let rec find (comparer: IComparer<'T>) k m = 
-        match m with 
-        | MapEmpty -> indexNotFound()
-#if ONE 
-        | MapOne(k2,v2) -> 
-            let c = comparer.Compare(k,k2) 
-            if c = 0 then v2
-            else indexNotFound()
-#endif
-        | MapNode(k2,v2,l,r,_) -> 
-            let c = comparer.Compare(k,k2) 
-            if c < 0 then find comparer k l
-            elif c = 0 then v2
-            else find comparer k r
+        let mk l k v r = 
+            match l,r with 
+            | MapEmpty,MapEmpty -> MapOne(k,v)
+            | _ -> 
+                let hl = height l 
+                let hr = height r 
+                let m = if hl < hr then hr else hl 
+                MapNode(k,v,l,r,m+1)
 
-    let rec tryFind (comparer: IComparer<'T>) k m = 
-        match m with 
-        | MapEmpty -> None
-#if ONE 
-        | MapOne(k2,v2) -> 
-            let c = comparer.Compare(k,k2) 
-            if c = 0 then Some v2
-            else None
-#endif
-        | MapNode(k2,v2,l,r,_) -> 
-            let c = comparer.Compare(k,k2) 
-            if c < 0 then tryFind comparer k l
-            elif c = 0 then Some v2
-            else tryFind comparer k r
+        let rebalance t1 k v t2 =
+            let t1h = height t1 
+            let t2h = height t2 
+            if  t2h > t1h + 2 then (* right is heavier than left *)
+                match t2 with 
+                | MapNode(t2k,t2v,t2l,t2r,_) -> 
+                   (* one of the nodes must have height > height t1 + 1 *)
+                   if height t2l > t1h + 1 then  (* balance left: combination *)
+                     match t2l with 
+                     | MapNode(t2lk,t2lv,t2ll,t2lr,_) ->
+                        mk (mk t1 k v t2ll) t2lk t2lv (mk t2lr t2k t2v t2r) 
+                     | _ -> failwith "rebalance"
+                   else (* rotate left *)
+                     mk (mk t1 k v t2l) t2k t2v t2r
+                | _ -> failwith "rebalance"
+            else
+                if  t1h > t2h + 2 then (* left is heavier than right *)
+                  match t1 with 
+                  | MapNode(t1k,t1v,t1l,t1r,_) -> 
+                    (* one of the nodes must have height > height t2 + 1 *)
+                      if height t1r > t2h + 1 then 
+                      (* balance right: combination *)
+                        match t1r with 
+                        | MapNode(t1rk,t1rv,t1rl,t1rr,_) ->
+                            mk (mk t1l t1k t1v t1rl) t1rk t1rv (mk t1rr k v t2)
+                        | _ -> failwith "rebalance"
+                      else
+                        mk t1l t1k t1v (mk t1r k v t2)
+                  | _ -> failwith "rebalance"
+                else mk t1 k v t2
 
-    let partition1 (comparer: IComparer<'T>) f k v (acc1,acc2) = 
-        if f k v then (add comparer k v acc1,acc2) else (acc1,add comparer k v acc2) 
-    
-    let rec partitionAux (comparer: IComparer<'T>) f s acc = 
-        match s with 
-        | MapEmpty -> acc
-#if ONE 
-        | MapOne(k,v) -> partition1 comparer f k v acc
-#endif
-        | MapNode(k,v,l,r,_) -> 
-            let acc = partitionAux comparer f r acc 
-            let acc = partition1 comparer f k v acc
-            partitionAux comparer f l acc
+        let rec add (comparer: IComparer<'Value>) k v m = 
+            match m with 
+            | MapEmpty -> MapOne(k,v)
+            | MapOne(k2,_) -> 
+                let c = comparer.Compare(k,k2) 
+                if c < 0   then MapNode (k,v,MapEmpty,m,2)
+                elif c = 0 then MapOne(k,v)
+                else            MapNode (k,v,m,MapEmpty,2)
+            | MapNode(k2,v2,l,r,h) -> 
+                let c = comparer.Compare(k,k2) 
+                if c < 0 then rebalance (add comparer k v l) k2 v2 r
+                elif c = 0 then MapNode(k,v,l,r,h)
+                else rebalance l k2 v2 (add comparer k v r) 
 
-    let partition (comparer: IComparer<'T>) f s = partitionAux comparer f s (empty,empty)
+        let rec find (comparer: IComparer<'Value>) k m = 
+            match m with 
+            | MapEmpty -> raise (KeyNotFoundException())
+            | MapOne(k2,v2) -> 
+                let c = comparer.Compare(k,k2) 
+                if c = 0 then v2
+                else raise (KeyNotFoundException())
+            | MapNode(k2,v2,l,r,_) -> 
+                let c = comparer.Compare(k,k2) 
+                if c < 0 then find comparer k l
+                elif c = 0 then v2
+                else find comparer k r
 
-    let filter1 (comparer: IComparer<'T>) f k v acc = if f k v then add comparer k v acc else acc 
+        let rec tryFind (comparer: IComparer<'Value>) k m = 
+            match m with 
+            | MapEmpty -> None
+            | MapOne(k2,v2) -> 
+                let c = comparer.Compare(k,k2) 
+                if c = 0 then Some v2
+                else None
+            | MapNode(k2,v2,l,r,_) -> 
+                let c = comparer.Compare(k,k2) 
+                if c < 0 then tryFind comparer k l
+                elif c = 0 then Some v2
+                else tryFind comparer k r
 
-    let rec filterAux (comparer: IComparer<'T>) f s acc = 
-        match s with 
-        | MapEmpty -> acc
-#if ONE 
-        | MapOne(k,v) -> filter1 comparer f k v acc
-#endif
-        | MapNode(k,v,l,r,_) ->
-            let acc = filterAux comparer f l acc
-            let acc = filter1 comparer f k v acc
-            filterAux comparer f r acc
+        let partition1 (comparer: IComparer<'Value>) (f:OptimizedClosures.FSharpFunc<_,_,_>) k v (acc1,acc2) = 
+            if f.Invoke(k, v) then (add comparer k v acc1,acc2) else (acc1,add comparer k v acc2) 
+        
+        let rec partitionAux (comparer: IComparer<'Value>) (f:OptimizedClosures.FSharpFunc<_,_,_>) s acc = 
+            match s with 
+            | MapEmpty -> acc
+            | MapOne(k,v) -> partition1 comparer f k v acc
+            | MapNode(k,v,l,r,_) -> 
+                let acc = partitionAux comparer f r acc 
+                let acc = partition1 comparer f k v acc
+                partitionAux comparer f l acc
 
-    let filter (comparer: IComparer<'T>) f s = filterAux comparer f s empty
+        let partition (comparer: IComparer<'Value>) f s = partitionAux comparer (OptimizedClosures.FSharpFunc<_,_,_>.Adapt(f)) s (empty,empty)
 
-    let rec spliceOutSuccessor m = 
-        match m with 
-        | MapEmpty -> failwith "internal error: Map.splice_out_succ_or_pred"
-#if ONE 
-        | MapOne(k2,v2) -> k2,v2,MapEmpty
-#endif
-        | MapNode(k2,v2,l,r,_) ->
-            match l with 
-            | MapEmpty -> k2,v2,r
-            | _ -> let k3,v3,l' = spliceOutSuccessor l in k3,v3,mk l' k2 v2 r
+        let filter1 (comparer: IComparer<'Value>) (f:OptimizedClosures.FSharpFunc<_,_,_>) k v acc = if f.Invoke(k, v) then add comparer k v acc else acc 
 
-    let rec remove (comparer: IComparer<'T>) k m = 
-        match m with 
-        | MapEmpty -> empty
-#if ONE 
-        | MapOne(k2,v2) -> 
-            let c = comparer.Compare(k,k2) 
-            if c = 0 then MapEmpty else m
-#endif
-        | MapNode(k2,v2,l,r,_) -> 
-            let c = comparer.Compare(k,k2) 
-            if c < 0 then rebalance (remove comparer k l) k2 v2 r
-            elif c = 0 then 
-              match l,r with 
-              | MapEmpty,_ -> r
-              | _,MapEmpty -> l
-              | _ -> 
-                  let sk,sv,r' = spliceOutSuccessor r 
-                  mk l sk sv r'
-            else rebalance l k2 v2 (remove comparer k r) 
+        let rec filterAux (comparer: IComparer<'Value>) (f:OptimizedClosures.FSharpFunc<_,_,_>) s acc = 
+            match s with 
+            | MapEmpty -> acc
+            | MapOne(k,v) -> filter1 comparer f k v acc
+            | MapNode(k,v,l,r,_) ->
+                let acc = filterAux comparer f l acc
+                let acc = filter1 comparer f k v acc
+                filterAux comparer f r acc
 
-    let rec containsKey (comparer: IComparer<'T>) k m = 
-        match m with 
-        | MapEmpty -> false
-#if ONE 
-        | MapOne(k2,v2) -> (comparer.Compare(k,k2) = 0)
-#endif
-        | MapNode(k2,_,l,r,_) -> 
-            let c = comparer.Compare(k,k2) 
-            if c < 0 then containsKey comparer k l
-            else (c = 0 || containsKey comparer k r)
+        let filter (comparer: IComparer<'Value>) f s = filterAux comparer (OptimizedClosures.FSharpFunc<_,_,_>.Adapt(f)) s empty
 
-    let rec iter f m = 
-        match m with 
-        | MapEmpty -> ()
-#if ONE 
-        | MapOne(k2,v2) -> f k2 v2
-#endif
-        | MapNode(k2,v2,l,r,_) -> iter f l; f k2 v2; iter f r
+        let rec spliceOutSuccessor m = 
+            match m with 
+            | MapEmpty -> failwith "internal error: Map.spliceOutSuccessor"
+            | MapOne(k2,v2) -> k2,v2,MapEmpty
+            | MapNode(k2,v2,l,r,_) ->
+                match l with 
+                | MapEmpty -> k2,v2,r
+                | _ -> let k3,v3,l' = spliceOutSuccessor l in k3,v3,mk l' k2 v2 r
 
-    let rec first f m = 
-        match m with 
-        | MapEmpty -> None
-#if ONE 
-        | MapOne(k2,v2) -> f k2 v2 
-#endif
-        | MapNode(k2,v2,l,r,_) -> 
-            match first f l with 
-            | Some _ as res -> res 
-            | None -> 
-            match f k2 v2 with 
-            | Some _ as res -> res 
-            | None -> first f r
+        let rec remove (comparer: IComparer<'Value>) k m = 
+            match m with 
+            | MapEmpty -> empty
+            | MapOne(k2,_) -> 
+                let c = comparer.Compare(k,k2) 
+                if c = 0 then MapEmpty else m
+            | MapNode(k2,v2,l,r,_) -> 
+                let c = comparer.Compare(k,k2) 
+                if c < 0 then rebalance (remove comparer k l) k2 v2 r
+                elif c = 0 then 
+                  match l,r with 
+                  | MapEmpty,_ -> r
+                  | _,MapEmpty -> l
+                  | _ -> 
+                      let sk,sv,r' = spliceOutSuccessor r 
+                      mk l sk sv r'
+                else rebalance l k2 v2 (remove comparer k r) 
 
-    let rec exists f m = 
-        match m with 
-        | MapEmpty -> false
-#if ONE 
-        | MapOne(k2,v2) -> f k2 v2
-#endif
-        | MapNode(k2,v2,l,r,_) -> f k2 v2 || exists f l || exists f r
+        let rec mem (comparer: IComparer<'Value>) k m = 
+            match m with 
+            | MapEmpty -> false
+            | MapOne(k2,_) -> (comparer.Compare(k,k2) = 0)
+            | MapNode(k2,_,l,r,_) -> 
+                let c = comparer.Compare(k,k2) 
+                if c < 0 then mem comparer k l
+                else (c = 0 || mem comparer k r)
 
-    let rec forAll f m = 
-        match m with 
-        | MapEmpty -> true
-#if ONE 
-        | MapOne(k2,v2) -> f k2 v2
-#endif
-        | MapNode(k2,v2,l,r,_) -> f k2 v2 && forAll f l && forAll f r
+        let rec iterOpt (f:OptimizedClosures.FSharpFunc<_,_,_>) m =
+            match m with 
+            | MapEmpty -> ()
+            | MapOne(k2,v2) -> f.Invoke(k2, v2)
+            | MapNode(k2,v2,l,r,_) -> iterOpt f l; f.Invoke(k2, v2); iterOpt f r
 
-    let rec map f m = 
-        match m with 
-        | MapEmpty -> empty
-#if ONE 
-        | MapOne(k,v) -> MapOne(k,f v)
-#endif
-        | MapNode(k,v,l,r,h) -> let v2 = f v in MapNode(k,v2,map f l, map f r,h)
+        let iter f m = iterOpt (OptimizedClosures.FSharpFunc<_,_,_>.Adapt(f)) m
 
-    let rec mapi f m = 
-        match m with
-        | MapEmpty -> empty
-#if ONE 
-        | MapOne(k,v) -> MapOne(k,f k v)
-#endif
-        | MapNode(k,v,l,r,h) -> let v2 = f k v in MapNode(k,v2, mapi f l, mapi f r,h)
+        let rec tryPickOpt (f:OptimizedClosures.FSharpFunc<_,_,_>) m =
+            match m with 
+            | MapEmpty -> None
+            | MapOne(k2,v2) -> f.Invoke(k2, v2) 
+            | MapNode(k2,v2,l,r,_) -> 
+                match tryPickOpt f l with 
+                | Some _ as res -> res 
+                | None -> 
+                match f.Invoke(k2, v2) with 
+                | Some _ as res -> res 
+                | None -> 
+                tryPickOpt f r
 
-    // Fold, right-to-left. 
-    //
-    // NOTE: This differs from the behaviour of Set.fold which folds left-to-right.
-    let rec fold f m x = 
-        match m with 
-        | MapEmpty -> x
-#if ONE 
-        | MapOne(k,v) -> f k v x
-#endif
-        | MapNode(k,v,l,r,_) -> fold f l (f k v (fold f r x))
+        let tryPick f m = tryPickOpt (OptimizedClosures.FSharpFunc<_,_,_>.Adapt(f)) m
 
-    let foldSection (comparer: IComparer<'T>) lo hi f m x =
-        let rec fold_from_to f m x = 
+        let rec existsOpt (f:OptimizedClosures.FSharpFunc<_,_,_>) m = 
+            match m with 
+            | MapEmpty -> false
+            | MapOne(k2,v2) -> f.Invoke(k2, v2)
+            | MapNode(k2,v2,l,r,_) -> existsOpt f l || f.Invoke(k2, v2) || existsOpt f r
+
+        let exists f m = existsOpt (OptimizedClosures.FSharpFunc<_,_,_>.Adapt(f)) m
+
+        let rec forallOpt (f:OptimizedClosures.FSharpFunc<_,_,_>) m = 
+            match m with 
+            | MapEmpty -> true
+            | MapOne(k2,v2) -> f.Invoke(k2, v2)
+            | MapNode(k2,v2,l,r,_) -> forallOpt f l && f.Invoke(k2, v2) && forallOpt f r
+
+        let forall f m = forallOpt (OptimizedClosures.FSharpFunc<_,_,_>.Adapt(f)) m
+
+        let rec map f m = 
+            match m with 
+            | MapEmpty -> empty
+            | MapOne(k,v) -> MapOne(k,f v)
+            | MapNode(k,v,l,r,h) -> 
+                let l2 = map f l 
+                let v2 = f v 
+                let r2 = map f r 
+                MapNode(k,v2,l2, r2,h)
+
+        let rec mapiOpt (f:OptimizedClosures.FSharpFunc<_,_,_>) m = 
+            match m with
+            | MapEmpty -> empty
+            | MapOne(k,v) -> MapOne(k, f.Invoke(k, v))
+            | MapNode(k,v,l,r,h) -> 
+                let l2 = mapiOpt f l 
+                let v2 = f.Invoke(k, v) 
+                let r2 = mapiOpt f r 
+                MapNode(k,v2, l2, r2,h)
+
+        let mapi f m = mapiOpt (OptimizedClosures.FSharpFunc<_,_,_>.Adapt(f)) m
+
+        let rec foldBackOpt (f:OptimizedClosures.FSharpFunc<_,_,_,_>) m x = 
             match m with 
             | MapEmpty -> x
-#if ONE 
-            | MapOne(k,v) ->
-                let clo_k = comparer.Compare(lo,k)
-                let ck_hi = comparer.Compare(k,hi)
-                let x = if clo_k <= 0 && ck_hi <= 0 then f k v x else x
-                x
-#endif
-            | MapNode(k,v,l,r,_) ->
-                let clo_k = comparer.Compare(lo,k)
-                let ck_hi = comparer.Compare(k,hi)
-                let x = if clo_k < 0                then fold_from_to f l x else x
-                let x = if clo_k <= 0 && ck_hi <= 0 then f k v x                     else x
-                let x = if ck_hi < 0                then fold_from_to f r x else x
-                x
-       
-        if comparer.Compare(lo,hi) = 1 then x else fold_from_to f m x
+            | MapOne(k,v) -> f.Invoke(k,v,x)
+            | MapNode(k,v,l,r,_) -> 
+                let x = foldBackOpt f r x
+                let x = f.Invoke(k,v,x)
+                foldBackOpt f l x
 
-    let rec foldMap (comparer: IComparer<'T>) f m z acc = 
-        match m with 
-        | MapEmpty -> acc,z
-#if ONE 
-        | MapOne(k,v) -> 
-            let v',z = f k v z
-            add comparer k v' acc,z
-#endif
-        | MapNode(k,v,l,r,_) -> 
-            let acc,z = foldMap comparer f r z acc
-            let v',z = f k v z
-            let acc = add comparer k v' acc 
-            foldMap comparer f l z acc
+        let foldBack f m x = foldBackOpt (OptimizedClosures.FSharpFunc<_,_,_,_>.Adapt(f)) m x
 
-    let toList m = fold (fun k v acc -> (k,v) :: acc) m []
-    let toArray m = m |> toList |> Array.ofList
-    let ofList comparer l = List.fold (fun acc (k,v) -> add comparer k v acc) empty l
+        let rec foldOpt (f:OptimizedClosures.FSharpFunc<_,_,_,_>) x m  = 
+            match m with 
+            | MapEmpty -> x
+            | MapOne(k,v) -> f.Invoke(x,k,v)
+            | MapNode(k,v,l,r,_) -> 
+                let x = foldOpt f x l
+                let x = f.Invoke(x,k,v)
+                foldOpt f x r
 
-    
-    let rec mkFromEnumerator comparer acc (e : IEnumerator<_>) = 
-        if e.MoveNext() then 
-            let (x,y) = e.Current 
-            mkFromEnumerator comparer (add comparer x y acc) e
-        else acc
-      
-    let ofSeq comparer (c : seq<_>) =
-        use ie = c.GetEnumerator()
-        mkFromEnumerator comparer empty ie 
-      
-    let copyToArray s (arr: _[]) i =
-        let j = ref i 
-        s |> iter (fun x y -> arr.[!j] <- KeyValuePair(x,y); j := !j + 1)
+        let fold f x m = foldOpt (OptimizedClosures.FSharpFunc<_,_,_,_>.Adapt(f)) x m
+
+        let foldSectionOpt (comparer: IComparer<'Value>) lo hi (f:OptimizedClosures.FSharpFunc<_,_,_,_>) m x =
+            let rec foldFromTo (f:OptimizedClosures.FSharpFunc<_,_,_,_>) m x = 
+                match m with 
+                | MapEmpty -> x
+                | MapOne(k,v) ->
+                    let cLoKey = comparer.Compare(lo,k)
+                    let cKeyHi = comparer.Compare(k,hi)
+                    let x = if cLoKey <= 0 && cKeyHi <= 0 then f.Invoke(k, v, x) else x
+                    x
+                | MapNode(k,v,l,r,_) ->
+                    let cLoKey = comparer.Compare(lo,k)
+                    let cKeyHi = comparer.Compare(k,hi)
+                    let x = if cLoKey < 0                 then foldFromTo f l x else x
+                    let x = if cLoKey <= 0 && cKeyHi <= 0 then f.Invoke(k, v, x) else x
+                    let x = if cKeyHi < 0                 then foldFromTo f r x else x
+                    x
+           
+            if comparer.Compare(lo,hi) = 1 then x else foldFromTo f m x
+
+        let foldSection (comparer: IComparer<'Value>) lo hi f m x =
+            foldSectionOpt comparer lo hi (OptimizedClosures.FSharpFunc<_,_,_,_>.Adapt(f)) m x
+
+        let toList m = 
+            let rec loop m acc = 
+                match m with 
+                | MapEmpty -> acc
+                | MapOne(k,v) -> (k,v)::acc
+                | MapNode(k,v,l,r,_) -> loop l ((k,v)::loop r acc)
+            loop m []
+        let toArray m = m |> toList |> Array.ofList
+        let ofList comparer l = List.fold (fun acc (k,v) -> add comparer k v acc) empty l
+
+        let rec mkFromEnumerator comparer acc (e : IEnumerator<_>) = 
+            if e.MoveNext() then 
+                let (x,y) = e.Current 
+                mkFromEnumerator comparer (add comparer x y acc) e
+            else acc
+          
+        let ofArray comparer (arr : array<_>) =
+            let mutable res = empty
+            for (x,y) in arr do
+                res <- add comparer x y res 
+            res
+
+        let ofSeq comparer (c : seq<'Key * 'T>) =
+            match c with 
+            | :? array<'Key * 'T> as xs -> ofArray comparer xs
+            | :? list<'Key * 'T> as xs -> ofList comparer xs
+            | _ -> 
+                use ie = c.GetEnumerator()
+                mkFromEnumerator comparer empty ie 
+          
+        let copyToArray s (arr: _[]) i =
+            let j = ref i 
+            s |> iter (fun x y -> arr.[!j] <- KeyValuePair(x,y); j := !j + 1)
 
     
     ///// Additional add single map entry
@@ -361,6 +383,16 @@ module MapTree =
 ///Shard Map
 ////////////////////
 ///////////////////////////
+
+type Shard<'K,'V> = MapTree<'K,'V> []
+
+type MapPos<'K,'V> =
+    struct
+    val bi : int
+    val si : int
+    val map : MapTree<'K,'V>
+    end
+    new(b,s,m) = {bi= b;si=s;map=m}
 
 
 open System.Collections.Generic
@@ -397,7 +429,7 @@ let inline private higherRange (index:int,bitdepth:int) = (index ||| (1 <<< (bit
 /// Shard Map
 ////////////////////////////
 
-type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucket:MapTree<'K,'V> [] []) =
+type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucket:Shard<'K,'V> []) =
 
     let empty = Array.zeroCreate<MapTree<'K,'V>>(ShardSize)
 
@@ -421,7 +453,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     let mutable capacity = (bucket.Length * ShardSize) - 1
     
     let mutable mapCache = []
-    
+
     /// Internal Funtions
     /////////////////////////////////////////////////
 
@@ -445,7 +477,8 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 
     let getMap (key:'K) =
         let kh = key.GetHashCode()
-        bucket.[bucketIndex(kh,bucketBitMask)].[shardIndex kh] 
+        bucket.[bucketIndex(kh,bucketBitMask)].[shardIndex kh]
+
     let item (key:'K) =
         let m = getMap key
         if isEmpty m then
@@ -471,7 +504,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         
         //printfn "ibmd : %i / isize: %i" ibmd isize
         
-        let newBucket = Array.zeroCreate<MapTree<'K,'V> []> (nsize)
+        let newBucket = Array.zeroCreate<Shard<'K,'V>> (nsize)
         //printfn "new bucket of %i size created" nsize
         
         Tasks.Parallel.For(0, bucket.Length, 
@@ -538,7 +571,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             shrd.[si] <- MapTree.MapOne (k,v)
             countRef := Interlocked.Increment(countRef)
         else
-            if not(MapTree.containsKey comparer k m) then 
+            if not(MapTree.mem comparer k m) then 
                 countRef := Interlocked.Increment(countRef)
             
             shrd.[si] <- MapTree.add comparer k v m
@@ -570,13 +603,25 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         go(mapList() , state)
 
     let transpose (fn:MapTree<'K,'V> -> MapTree<'K,'T>) =
-        let nBucket = Array.zeroCreate<MapTree<'K,'T> []>(bucket.Length)
-        for bi in 0 .. bucket.Length - 1 do
-            for si in 0 .. ShardSize - 1 do
-                if not(isEmpty bucket.[bi].[si]) then
-                    if isEmpty nBucket.[bi] then nBucket.[bi] <- Array.zeroCreate<MapTree<'K,'T>>(ShardSize)
-                    nBucket.[bi].[si] <- fn bucket.[bi].[si]
+        let nBucket = Array.zeroCreate<Shard<'K,'T>>(bucket.Length)
+        Tasks.Parallel.For(0, bucket.Length,
+             fun bi ->
+        //for bi in 0 .. bucket.Length - 1 do
+                for si in 0 .. ShardSize - 1 do
+                    let m = bucket.[bi].[si]
+                    if not(isEmpty m) then
+                        if isEmpty nBucket.[bi] then nBucket.[bi] <- Array.zeroCreate<MapTree<'K,'T>>(ShardSize)
+                        nBucket.[bi].[si] <- fn m
+        ) |> ignore
         ShardMap<'K,'T>(!countRef,nBucket)
+
+    let keySet fn h k (nBucket:Shard<'K,'T> []) =
+        let hk = k.GetHashCode()
+        let bi = bucketIndex(hk,bucketBitMask)
+        if isEmpty nBucket.[bi] then
+            nBucket.[bi] <- Array.zeroCreate<MapTree<'K,'T>>(ShardSize)
+        nBucket.[bi].[shardIndex(hk)] <- fn h
+
 
     /////////////////////////////////////////////////////////////
     /// Constructor operation to ensure no null array references
@@ -608,7 +653,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 
 
     member __.Copy() =        
-        let newbucket = Array.zeroCreate<MapTree<'K,'V>[]>(bucket.Length)
+        let newbucket = Array.zeroCreate<Shard<'K,'V>>(bucket.Length)
         Array.Copy(bucket,newbucket,bucket.Length)
         ShardMap<'K,'V>(!countRef,newbucket)
                 
@@ -635,7 +680,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         if isEmpty m then
             false
         else
-            MapTree.containsKey comparer key m
+            MapTree.mem comparer key m
 
     member __.TryFind(key:'K) =
         if resizing then
@@ -644,9 +689,14 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             tryFind key
 
 
-    member __.Fold (foldFn:'K -> 'V -> 'S -> 'S) (istate:'S) = mapFold (fun m acc -> MapTree.fold foldFn m acc) istate
+    member __.Fold (foldFn:'S -> 'K -> 'V  -> 'S) (istate:'S) = 
+        // let mutable state = istate
+        // for kvp in x do
+        //     state <- foldFn kvp.Key kvp.Value state
+        // state       
+        mapFold (fun m acc -> MapTree.fold foldFn acc m) istate
 
-    member __.Partition (predicate:'K -> 'V -> bool) = mapFold (fun m acc -> MapTree.partitionAux comparer predicate m acc) (MapEmpty,MapEmpty)
+    member __.Partition (predicate:'K -> 'V -> bool) = mapFold (fun m acc -> MapTree.partitionAux comparer (OptimizedClosures.FSharpFunc<_,_,_>.Adapt(predicate)) m acc) (MapEmpty,MapEmpty)
 
     member __.Map (mapFn:'V -> 'T) : ShardMap<'K,'T> = transpose (MapTree.map mapFn)
         // let nBucket = Array.zeroCreate<MapTree<'K,'T> []>(bucket.Length)
@@ -655,8 +705,8 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         //         if not(isEmpty bucket.[bi].[si]) then
         //             if isEmpty nBucket.[bi] then nBucket.[bi] <- Array.zeroCreate<MapTree<'K,'T>>(ShardSize)
         //             nBucket.[bi].[si] <- MapTree.map mapFn bucket.[bi].[si]
-        // ShardMap<'K,'T>(!countRef,nBucket)                
-
+        // ShardMap<'K,'T>(!countRef,nBucket)
+    
 ////////////////
     member __.toSeq () =
 
@@ -721,9 +771,9 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
                 else
                     tmapCount <- tmapCount + 1
                     rmapCount <- rmapCount + 1
-                    columnCount.[i] <- columnCount.[i] + (MapTree.count m)
-                    rowCount <- rowCount + (MapTree.count m)
-                    printf " %3i |" (MapTree.count m)
+                    columnCount.[i] <- columnCount.[i] + (MapTree.size m)
+                    rowCount <- rowCount + (MapTree.size m)
+                    printf " %3i |" (MapTree.size m)
             printfn "} = %5i[%6i]" rmapCount rowCount
         
         printf "Total{" 
@@ -754,7 +804,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         let bitdepth = (calcBitMaskDepth counter)
         let bucketSize = pow2 (bitdepth)
         let bucketBitMask = calcSubBitMask bitdepth
-        let newBucket = Array.zeroCreate<MapTree<'K,'V> []>(bucketSize)
+        let newBucket = Array.zeroCreate<Shard<'K,'V>>(bucketSize)
 
         items
         |> Seq.iter (fun (k,v) -> 
@@ -829,6 +879,23 @@ let smap = new ShardMap<_,_>(bigData)
 smap1.GetHashCode()
 let smap1 = smap.AddToNew("alkdfjas","fadfdf")
 let bmap = Map<_,_>(numberStrings)
+
+for i in 0 .. 1000 do
+    let nsmap = smap.Map int
+    ()
+
+for i in 0 .. 1000 do
+    let nbmap = Map.map (fun _ v -> int v) bmap
+    ()
+////////////////////////////////////////
+for i in 0 .. 10000 do
+    let nsmap = smap.Fold (fun acc _ _ -> acc + 1) 0
+    ()
+
+for i in 0 .. 10000 do
+    let nbmap = Map.fold (fun acc _ _ -> acc + 1 ) 0 bmap
+    ()
+#time
 
 smap.BucketSize
 smap.Count
