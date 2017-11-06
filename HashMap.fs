@@ -550,17 +550,17 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 
         lock bucket.SyncRoot (fun () -> bucket.[bi] <- shrd)
 
-        mapCache <- []  // clear the mapCache, next call to seq can rebuild with new map refs
-
         let m = shrd.[si]
-        if isEmpty m then
-            shrd.[si] <- MapOne (k,v)
-            countRef := Interlocked.Increment(countRef)
-        else
-            if not(MapTree.mem comparer k m) then 
+        let nm = 
+            if isEmpty m then
                 countRef := Interlocked.Increment(countRef)
-            
-            shrd.[si] <- MapTree.add comparer k v m
+                MapOne (k,v)
+            else
+                if not(MapTree.mem comparer k m) then 
+                    countRef := Interlocked.Increment(countRef)
+                MapTree.add comparer k v m
+        shrd.[si] <- nm
+        mapCache <-  nm :: mapCache
 
     let remove(k:'K) =
         let kh = k.GetHashCode()
