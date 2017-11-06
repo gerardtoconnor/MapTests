@@ -445,10 +445,13 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     let mutable capacity = (bucket.Length * ShardSize) - 1
     
     let mutable mapCache = []
+    let mutable mapCacheRun = false
 
     /// Internal Funtions
     /////////////////////////////////////////////////
-
+    let cacheReset () = 
+        mapCache <- []
+        mapCacheRun <- false
     let newShard oary = 
         let nary = Array.zeroCreate<MapTree<'K,'V>>(ShardSize)
         Array.Copy(oary,nary,ShardSize)
@@ -464,6 +467,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
                     if not(isEmpty bucket.[bi].[si]) then
                         result <- bucket.[bi].[si] :: result
             mapCache <- result
+            mapCacheRun <- true
             result                                 
         | result -> 
             result
@@ -562,13 +566,13 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             countRef := Interlocked.Increment(countRef)
             let nm = MapOne (k,v)
             shrd.[si] <- nm
-            if not mapCache.IsEmpty then mapCache <- nm :: mapCache
+            if mapCacheRun then mapCache <- nm :: mapCache // <<
         else
             if not(MapTree.mem comparer k m) then 
                 countRef := Interlocked.Increment(countRef)
             let nm = MapTree.add comparer k v m
             shrd.[si] <- nm
-            mapCache <-  [] // no clean way to rip out the previous 'm' map so need to clear cache
+            cacheReset () // no clean way to rip out the previous 'm' map so need to clear cache
 
     let remove(k:'K) =
         let kh = k.GetHashCode()
@@ -578,7 +582,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         
         lock bucket.SyncRoot (fun () -> bucket.[bi] <- shrd )
 
-        mapCache <- []  // clear the mapCache, next call to seq can rebuild with new map refs
+        cacheReset()  // clear the mapCache, next call to seq can rebuild with new map refs
 
         let m = shrd.[si]
         if isEmpty m then
