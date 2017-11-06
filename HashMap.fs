@@ -1,12 +1,5 @@
 module HashMap
 
-open MapOld
-open SampleData
-
-#if INTERACTIVE
-    #time
-#endif
-
 #nowarn "51"
 #nowarn "69" // interface implementations in augmentations
 #nowarn "60" // override implementations in augmentations
@@ -362,6 +355,15 @@ module MapTree =
 ////////////////////
 ///////////////////////////
 
+type Shard<'K,'V> = MapTree<'K,'V> []
+type Bucket<'K,'V> = Shard<'K,'V> []
+
+type MutateHead<'V> =
+    struct
+        val mutable Head : 'V list
+    end
+    new(v:'V) = { Head  = [v]}
+    member x.Add(v:'V) = x.Head <- v :: x.Head
 
 open System.Collections.Generic
 open System
@@ -704,14 +706,23 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     interface System.Collections.IEnumerable with
         override s.GetEnumerator() = (s.toSeq () :> System.Collections.IEnumerator)
 
-    static member Union (unionf:seq<'V> -> 'b) (maps:ShardMap<'K,'V> seq) : ShardMap<'K,'b> =
-        let mutable cache = []
-        let mutable counter = 0
-        let mutable maxBucket = 0 
-        for map in maps do
-            counter <- counter + 1
-            if map.BucketSize > maxBucket then maxBucket <- map.BucketSize 
-            cache <- map :: cache
+    // static member Union (unionf:seq<'V> -> 'b) (maps:ShardMap<'K,'V> seq) : ShardMap<'K,'b> =
+    //     let mutable cache = []
+    //     let mutable counter = 0
+    //     let mutable maxBucket = 0 
+    //     for map in maps do
+    //         counter <- counter + 1
+    //         if map.BucketSize > maxBucket then maxBucket <- map.BucketSize 
+    //         cache <- map :: cache
+
+                
+    //     let BucketMap (source:Bucket<'K,'V>,target:Bucket<'K,MutateHead<'V>>) =
+
+    //     let processMaps (sources:Bucket<'K,'V> seq,unionf:seq<'V> -> 'T) =
+    //         let enum = sources.GetEnumerator()
+    //         let test3
+    //         for source in sources do
+
 
 
     new(counter:int,items:('K * 'V) seq) =
