@@ -694,7 +694,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             tryFind key
 
     member __.Fold (foldFn:'S -> 'K -> 'V  -> 'S) (istate:'S) = mapFold foldFn istate
-        
+    
     member __.Partition (predicate:'K -> 'V -> bool) =
         let predOpt = OptimizedClosures.FSharpFunc<_,_,_>.Adapt(predicate)
         let rec gls (ls,acc) =
@@ -893,9 +893,8 @@ for i in 0 .. 1000 do
     ()
 ////////////////////////////////////////
 
-for i in 0 .. 10 do
+for i in 0 .. 10000 do
     let nsmap = smap.Fold (fun acc _ _ -> acc + 1) 0 
-    if nsmap <> 10 then printfn "Error, fold broken %i" nsmap
     ()
 
 for i in 0 .. 10000 do
@@ -905,6 +904,7 @@ for i in 0 .. 10000 do
 for i in 0 .. 10000 do
     let nbmap = Map.fold (fun acc _ _ -> acc + 1 ) 0 bmap
     ()
+
 #time
 
 smap.BucketSize
