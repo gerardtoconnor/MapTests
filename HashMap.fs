@@ -378,7 +378,6 @@ module MapTree =
 ///////////////////////////
 
 type Shard<'K,'V> = MapTree<'K,'V> []
-<<<<<<< HEAD
 type Bucket<'K,'V> = Shard<'K,'V> []
 
 type MutateHead<'V> =
@@ -387,8 +386,6 @@ type MutateHead<'V> =
     end
     new(v:'V) = { Head  = [v]}
     member x.Add(v:'V) = x.Head <- v :: x.Head
-=======
->>>>>>> 2574b3bb4e585b11ba4e8016df41b86f374b475e
 
 open System.Collections.Generic
 open System
@@ -565,7 +562,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             countRef := Interlocked.Increment(countRef)
             let nm = MapOne (k,v)
             shrd.[si] <- nm
-            mapCache <-  nm :: mapCache
+            if not mapCache.IsEmpty then mapCache <- nm :: mapCache
         else
             if not(MapTree.mem comparer k m) then 
                 countRef := Interlocked.Increment(countRef)
@@ -783,7 +780,6 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     interface System.Collections.IEnumerable with
         override s.GetEnumerator() = (s.toSeq () :> System.Collections.IEnumerator)
 
-<<<<<<< HEAD
     // static member Union (unionf:seq<'V> -> 'b) (maps:ShardMap<'K,'V> seq) : ShardMap<'K,'b> =
     //     let mutable cache = []
     //     let mutable counter = 0
@@ -802,17 +798,6 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     //         for source in sources do
 
 
-=======
-    static member Union (maps:ShardMap<_,_> seq) =
-        let mutable cache = []
-        let mutable counter = 0
-        let mutable maxBucket = 0 
-        for map in maps do
-            counter <- counter + 1
-            if map.BucketSize > maxBucket then maxBucket <- map.BucketSize 
-            cache <- map :: cache
-        failwith "Not implimented"
->>>>>>> 2574b3bb4e585b11ba4e8016df41b86f374b475e
 
     new(counter:int,items:('K * 'V) seq) =
 
@@ -907,8 +892,10 @@ for i in 0 .. 1000 do
     let nbmap = Map.map (fun _ v -> int v) bmap
     ()
 ////////////////////////////////////////
-for i in 0 .. 10000 do
-    let nsmap = smap.Fold (fun acc _ _ -> acc + 1) 0
+
+for i in 0 .. 10 do
+    let nsmap = smap.Fold (fun acc _ _ -> acc + 1) 0 
+    if nsmap <> 10 then printfn "Error, fold broken %i" nsmap
     ()
 
 for i in 0 .. 10000 do
@@ -924,6 +911,8 @@ smap.BucketSize
 smap.Count
 smap |> Seq.length
 smap.PrintLayout()
+smap.MapList
+
 let sml = smap.SubMapList()
 calcBitMaskDepth smap.Count
 List.length sml
@@ -1087,28 +1076,3 @@ let union unionf (ms: Map<string,_> seq) =
        |> Seq.map (fun (k,es) -> (k,unionf (Seq.map (fun (KeyValue(_k,v)) -> v) es))) 
        |> Map.ofSeq
 #time
-
-type st =
-    struct
-    val X: int
-    val Y: int
-    end
-    new(x,y) = {X=x;Y=y}
-
-type cl(x:int,y:int) =
-    member val X = x
-    member val Y = y
-
-let rec go (arg:st) i = 
-    let tot = arg.X + arg.Y
-    let v = st(123,456)
-    if i < 100000000 then
-        go v (i + 1)
-go (st(123,456)) 0
-        
-let rec go (arg:cl) i = 
-    let tot = arg.X + arg.Y
-    let v = cl(345,456)
-    if i < 100000000 then
-        go v (i + 1)
-go (cl(123,456)) 0
