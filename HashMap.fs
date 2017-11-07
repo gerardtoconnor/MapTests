@@ -784,6 +784,8 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     interface System.Collections.IEnumerable with
         override s.GetEnumerator() = (s.toSeq () :> System.Collections.IEnumerator)
 
+    member private __.getMap () = ()
+
     static member Union (unionf:seq<'V> -> 'b) (maps:ShardMap<'K,'V> seq) : ShardMap<'K,'b> =        
         
         let processMaps (sources:Bucket<'K,'V> seq,unionf:seq<'V> -> 'T) =
@@ -824,11 +826,11 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             else
                 ShardMap<'K,'V>(0,[])
 
-            enum.Dispose()            
+            enum.Dispose()
 
-
-
-
+    ////////////////////////////////////
+    /// Contructors
+    ///////////////////////////////////
 
     new(counter:int,items:('K * 'V) seq) =
 
