@@ -784,22 +784,49 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     interface System.Collections.IEnumerable with
         override s.GetEnumerator() = (s.toSeq () :> System.Collections.IEnumerator)
 
-    // static member Union (unionf:seq<'V> -> 'b) (maps:ShardMap<'K,'V> seq) : ShardMap<'K,'b> =
-    //     let mutable cache = []
-    //     let mutable counter = 0
-    //     let mutable maxBucket = 0 
-    //     for map in maps do
-    //         counter <- counter + 1
-    //         if map.BucketSize > maxBucket then maxBucket <- map.BucketSize 
-    //         cache <- map :: cache
+    static member Union (unionf:seq<'V> -> 'b) (maps:ShardMap<'K,'V> seq) : ShardMap<'K,'b> =        
+        
+        let processMaps (sources:Bucket<'K,'V> seq,unionf:seq<'V> -> 'T) =
+            //let mutable target = Unchecked.defaultof<Bucket<'K,MutateHead<'V>>>
+            let enum = sources.GetEnumerator()
 
-                
-    //     let BucketMap (source:Bucket<'K,'V>,target:Bucket<'K,MutateHead<'V>>) =
+            let rec go(source,target) =
+                if source.Length = target.Length then
+                    Tasks.Parallel.For(0,source.Length,
+                        fun bi ->
+                            let sshrd = source.[bi]
+                            let tshrd = target.[bi]
+                            for si in 0 .. ShardSize - 1 do
+                                let sm = sshrd.[si]
+                                if isEmpty sm |> not then
+                                    let mutable tm = tshrd.[si]
+                                    if isEmpty tm then
+                                        tm <- Map.empty
+                                    tshrd.[si] <-
+                                        MapTree.fold (fun acc k v ->
+                                            match MapTree.tryFind k acc with
+                                            | Some mh -> 
+                                                mh.Add v
+                                                acc
+                                            | None -> 
+                                                MapTree.add k (MutateHead<'V>(v)) acc
+                                        ) tm sm
+                    ) |> ignore    
+                if enum.MoveNext() then
+                    go(enum.Current,target)
+            
+            if enum.MoveNext() then
+                let bsize = enum.Current.Length
+                let target = Array.zeroCreate<Shard<'K,MutateHead<'V>>>(bsize)
+                go(enum.Current,target)
 
-    //     let processMaps (sources:Bucket<'K,'V> seq,unionf:seq<'V> -> 'T) =
-    //         let enum = sources.GetEnumerator()
-    //         let test3
-    //         for source in sources do
+                transpose (MapTree.map (fun (mh:MutateHead<'V>) -> unionf mh.Head ))
+            else
+                ShardMap<'K,'V>(0,[])
+
+            enum.Dispose()            
+
+
 
 
 
