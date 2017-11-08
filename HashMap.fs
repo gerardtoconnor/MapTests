@@ -1,6 +1,8 @@
 module HashMap
 
 open MapOld.MapTree
+open MapTree
+open System.Threading.Tasks
 
 #nowarn "51"
 #nowarn "69" // interface implementations in augmentations
@@ -455,8 +457,8 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         nary
 
     let mapList () =
-        // match mapCache with
-        // | [] -> 
+        match mapCache with
+        | [] -> 
             //printfn "Building Map Cache List..."
             let mutable result = []
             for bi in 0 .. bucket.Length - 1 do
@@ -466,8 +468,8 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             mapCache <- result
             mapCacheRun <- true
             result                                 
-        // | result -> 
-        //     result
+        | result -> 
+            result
 
     let getMap (key:'K) =
         let kh = key.GetHashCode()
@@ -710,6 +712,25 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 
     member __.Fold (foldFn:'S -> 'K -> 'V  -> 'S) (istate:'S) = mapFold foldFn istate
 
+    member __.Fold2 (foldFn:'S -> 'K -> 'V  -> 'S) (istate:'S) =
+        let foldOpt = OptimizedClosures.FSharpFunc<_,_,_,_>.Adapt(foldFn)
+
+        let rec gmp(m,acc) = 
+            match m with
+            | MapEmpty -> acc
+            | MapOne (k,v) -> foldOpt.Invoke(acc,k,v)
+            | MapNode(k,v,l,r,_) ->
+                gmp(r,
+                    gmp(l,
+                        foldOpt.Invoke(acc,k,v)))
+        
+        let mutable state = istate 
+        for bi in 0 .. bucket.Length - 1 do
+            for si in 0 .. ShardSize - 1 do
+                if isEmpty bucket.[bi].[si] then ()
+                else
+                    state <- gmp(bucket.[bi].[si],state)
+
     member __.FoldCon (foldFn:'S -> 'K -> 'V  -> 'S) (istate:'S) =
         let foldOpt = OptimizedClosures.FSharpFunc<_,_,_,_>.Adapt(foldFn)
         let mutable running = true
@@ -773,6 +794,153 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             interface System.IDisposable with 
                   member self.Dispose() = stack <- [] }
 
+    member __.toSeq2 () =
+        let mutable stack = []
+        let mutable index = 0
+        let rec getStack(i) =
+            if isEmpty bucket.[bucketIndex(i,bucketBitMask)].[shardIndex(i)] then
+                if i < capacity then 
+                    getStack(i+1)
+                else
+                    false
+            else
+                stack <- [ bucket.[bucketIndex(i,bucketBitMask)].[shardIndex(i)] ]
+                index <- i + 1
+                true                                                   
+                    
+        let mutable current = Unchecked.defaultof<KeyValuePair<_,_>>
+
+        { new IEnumerator<_> with 
+                member self.Current = current
+            interface System.Collections.IEnumerator with
+                  member self.Current = box self.Current
+                  member self.MoveNext() = 
+                    let rec go =                                     
+                        function
+                        | [] -> 
+                            if index < capacity then
+                                if getStack(index) then
+                                    go stack
+                                else
+                                    false
+                            else
+                                false
+                        | MapEmpty :: rest -> go rest
+                        | MapOne (k,v) :: rest -> 
+                            current <- new KeyValuePair<_,_>(k,v)
+                            stack <- rest
+                            true                   
+                        | (MapNode(k,v,l,r,_)) :: rest ->             
+                            current <- new KeyValuePair<_,_>(k,v)
+                            stack <- l :: r :: rest
+                            true
+
+                    go stack
+
+                  member self.Reset() = 
+                                stack <- []
+                                index <- 0
+            interface System.IDisposable with 
+                  member self.Dispose() = stack <- [] }
+
+    
+
+    member __.toSeq3 () =
+        let mutable stack = []
+        let mutable gbi = 0
+        let mutable gsi = 0
+        let inline canIncrSi si = si + 1 < ShardSize
+        let inline canIncrBi bi = bi + 1 < bucket.Length
+        let rec getStack(bi,si) =
+            if isEmpty bucket.[bi].[si] then
+                if canIncrSi si then getStack(bi,si + 1)
+                elif canIncrBi bi then getStack(bi + 1,0)
+                else
+                    false
+            else
+                stack <- [ bucket.[bi].[si] ]
+                if canIncrSi si then gbi <- bi ; gsi <- si + 1
+                elif canIncrBi bi then gbi <- bi + 1 ; gsi <- 0
+                else gbi <- -1
+                true                                                   
+                    
+        let mutable current = Unchecked.defaultof<KeyValuePair<_,_>>
+
+        { new IEnumerator<_> with 
+                member self.Current = current
+            interface System.Collections.IEnumerator with
+                  member self.Current = box self.Current
+                  member self.MoveNext() = 
+                    let rec go =                                     
+                        function
+                        | [] -> 
+                            if gbi <> -1 then
+                                if getStack(gbi,gsi) then
+                                    go stack
+                                else
+                                    false
+                            else
+                                false
+                        | MapEmpty :: rest -> go rest
+                        | MapOne (k,v) :: rest -> 
+                            current <- new KeyValuePair<_,_>(k,v)
+                            stack <- rest
+                            true                   
+                        | (MapNode(k,v,l,r,_)) :: rest ->             
+                            current <- new KeyValuePair<_,_>(k,v)
+                            stack <- l :: r :: rest
+                            true
+
+                    go stack
+
+                  member self.Reset() = 
+                                stack <- []
+                                gbi <- 0
+                                gsi <- 0
+            interface System.IDisposable with 
+                  member self.Dispose() = stack <- [] }              
+
+
+    member __.toSeq4 () =
+        let mutable stack = []
+        let rec getStack(i) =
+            if isEmpty bucket.[bucketIndex(i,bucketBitMask)].[shardIndex(i)] then
+                if i < capacity then 
+                    getStack(i+1)
+            else
+                stack <- bucket.[bucketIndex(i,bucketBitMask)].[shardIndex(i)] :: stack
+                if i < capacity then 
+                    getStack(i+1)
+        
+        getStack(0)                            
+        let mutable current = Unchecked.defaultof<KeyValuePair<_,_>>
+
+        { new IEnumerator<_> with 
+                member self.Current = current
+            interface System.Collections.IEnumerator with
+                  member self.Current = box self.Current
+                  member self.MoveNext() = 
+                    let rec go =                                     
+                        function
+                        | [] -> false
+                        | MapEmpty :: rest -> go rest
+                        | MapOne (k,v) :: rest -> 
+                            current <- new KeyValuePair<_,_>(k,v)
+                            stack <- rest
+                            true                   
+                        | (MapNode(k,v,l,r,_)) :: rest ->             
+                            current <- new KeyValuePair<_,_>(k,v)
+                            stack <- l :: r :: rest
+                            true
+
+                    go stack
+
+                  member self.Reset() = 
+                                stack <- []
+                                getStack(0)
+            interface System.IDisposable with 
+                  member self.Dispose() = stack <- [] }    
+
 
 ////////////////
 
@@ -812,10 +980,10 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     
 
     interface IEnumerable<KeyValuePair<'K, 'V>> with
-        member s.GetEnumerator() = s.toSeq()
+        member s.GetEnumerator() = s.toSeq4()
 
     interface System.Collections.IEnumerable with
-        override s.GetEnumerator() = (s.toSeq () :> System.Collections.IEnumerator)
+        override s.GetEnumerator() = (s.toSeq4() :> System.Collections.IEnumerator)
 
     member private __.getBucket () = bucket
 
@@ -1176,7 +1344,15 @@ let addbitPos (state:uint16,pos:int) =
 
 let s = addbitPos(0us,7) 
 
+GC.Collect()
+let imem = GC.GetTotalMemory true
+
+let amem = GC.GetTotalMemory true
+
+GC.Collect()
+let beforemem = GC.GetTotalMemory true
 let smap = new ShardMap<_,_>(numberStrings)
+let aftermem = GC.GetTotalMemory true
 
 let nmap = smap.Map int
 nmap.["98549420"]
@@ -1204,7 +1380,12 @@ let smap = new ShardMap<_,_>(bigData)
 smap1.GetHashCode()
 let smap1 = smap.AddToNew("alkdfjas","fadfdf")
 
+
+
+GC.Collect()
+let beforemem = GC.GetTotalMemory true
 let bmap = Map<_,_>(numberStrings)
+let aftermem = GC.GetTotalMemory true
 
 #time
 
@@ -1217,15 +1398,15 @@ for i in 0 .. 1000 do
     ()
 ////////////////////////////////////////
 
-for i in 0 .. 10000 do
+for i in 0 .. 100000 do
     let nsmap = smap.Fold (fun acc _ _ -> acc + 1) 0 
     ()
 
-for i in 0 .. 10000 do
-    let nsmap = smap.FoldCon (fun acc _ _ -> acc + 1) 0
+for i in 0 .. 100000 do
+    let nsmap = smap.Fold2 (fun acc _ _ -> acc + 1) 0
     ()
 
-for i in 0 .. 10000 do
+for i in 0 .. 100000 do
     let nbmap = Map.fold (fun acc _ _ -> acc + 1 ) 0 bmap
     ()
 
@@ -1243,9 +1424,12 @@ List.length sml
 
 2 <<< (11-5)
 
+GC.Collect()
+let mem3 = GC.GetTotalMemory true
 let dict = Dictionary<string,string>()
 for (k,v) in numberStrings do
     dict.Add(k,v)
+let mem4 = GC.GetTotalMemory true
 
 for (k,v) in sample2 do
     dict.Add(k,v)
@@ -1317,6 +1501,9 @@ let ittrLoops = 10000
 let mutable counter = 0
 printfn "coutner:%i" counter
 
+#time
+GC.Collect()
+let beforemem = GC.GetTotalMemory true
 for i in 0 .. ittrLoops do
     smap |> Seq.iter (fun kvp -> 
         let k = kvp.Key
@@ -1324,6 +1511,8 @@ for i in 0 .. ittrLoops do
         // counter <- counter + 1
         ()
     )
+GC.Collect()
+let aftermem = GC.GetTotalMemory true
 
 smap.toSeq ()
 
@@ -1450,7 +1639,7 @@ let left1 = 32768us
 left1 >>> 1 |> bsprint
 
 let addbitPos (state:uint16,pos:int) =
-    (1us <<< pos) ||| state |> int |> bprint
+    (1us <<< pos) ||| state |> bsprint
 
 let empty = MutateHead<int>(1)
 let bucket = Array.zeroCreate<MutateHead<int>>(16)
