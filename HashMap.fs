@@ -1042,6 +1042,71 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         
         processMaps(unionf,maps)  //<<HACK to get intellisense to work
 
+    static member UnionParallel (unionf:'V list -> 'T) (maps:ShardMap<'K,'V> list) : ShardMap<'K,'T> =
+        let comparer = LanguagePrimitives.FastGenericComparer<'Key>
+
+        let tCount = ref 0 
+
+        let threadBuckets(sources:Bucket<'K,'V> list,target:Bucket<'K,MutateHead<'V>>) =
+            let fBucket = Array.zeroCreate<Shard<'K,'T>>(target.Length)
+            for fi in 0 .. target.Length - 1 do
+                fBucket.[fi] <- Array.zeroCreate<_>(ShardSize)
+
+            Tasks.Parallel.For(0,target.Length,fun bi ->
+                let tshrd = target.[bi] // target.[bi] << target shard depends on bitdepth
+                let rec go (ls:Bucket<'K,'V> list) = 
+                    match ls with
+                    | [] ->
+                        // mapping of final shard from target to final
+                        let fshrd = fBucket.[bi]
+                        for si in 0 .. ShardSize - 1 do
+                            let tm = tshrd.[si]
+                            if isEmpty tm |> not then
+                                fshrd.[si] <- MapTree.map (fun (mh:MutateHead<'V>) -> unionf mh.Head) tm                            
+                    | h :: t -> 
+                        if bi < h.Length then
+                            let sshrd = h.[bi]
+                            for si in 0 .. ShardSize - 1 do
+                                let sm = sshrd.[si]
+                                if isEmpty sm |> not then
+                                    let tm = tshrd.[si] //<< target shard depends on bitdepth
+                                    if isEmpty tm then
+                                        tCount := Interlocked.Add(tCount,MapTree.size sm)
+                                        tshrd.[si] <- MapTree.map (fun v -> MutateHead<_>(v)) sm
+                                    else
+                                        tshrd.[si] <-
+                                            MapTree.fold (fun acc k v -> // for each key in source
+                                                match MapTree.tryFind comparer k acc with // try find in acc target
+                                                | Some mh -> 
+                                                    mh.Add v
+                                                    acc
+                                                | None -> 
+                                                    tCount := Interlocked.Increment(tCount)
+                                                    MapTree.add comparer k (MutateHead<'V>(v)) acc
+                                            ) tm sm
+                        // next bucket on list
+                        go(t) 
+                go(sources)
+                
+            ) |> ignore
+
+            ShardMap<'K,'T>(!tCount,fBucket)
+            // match tail with                   
+            // | [] -> ShardMap.transpose (MapTree.map (fun (mh:MutateHead<'V>) -> unionf mh.Head )) !tCount target
+            // | h :: t -> threadBuckets(h.getBucket(),target,t)
+
+        
+        // start of enumeration (first shard used to create target interim map)
+        match maps with
+        | [] -> ShardMap<'K,'T>(0,[])
+        | h :: _ ->
+            let ibucket = h.getBucket()
+            let target = Array.zeroCreate<Shard<'K,MutateHead<'V>>>(ibucket.Length)
+            for bi in 0 .. ibucket.Length - 1 do
+                target.[bi] <- Array.zeroCreate<MapTree<'K,MutateHead<'V>>>(ShardSize)
+            let buckets = maps |> List.map (fun x -> x.getBucket())                       
+            threadBuckets(buckets ,target)
+
 
     ////////////////////////////////////
     /// Contructors
@@ -1357,7 +1422,7 @@ for i in 0 .. 10000 do
     ()
 
 for i in 0 .. 10000 do
-    let umap2 = [u1;u2;u3;u4] |> ShardMap.Union2 (Seq.sum)
+    let umap2 = [u1;u2;u3;u4] |> ShardMap.UnionParallel (List.sum)
     ()
 
 for i in 0 .. 10000 do
