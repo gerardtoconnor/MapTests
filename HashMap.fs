@@ -366,10 +366,6 @@ module MapTree =
         let j = ref i 
         s |> iter (fun x y -> arr.[!j] <- KeyValuePair(x,y); j := !j + 1)
 
-    
-    ///// Additional add single map entry
-    let fromOne (k:'Key,v:'T) = MapOne(k,v)
-
 
 ////////////////////////////
 ////////////////////////
@@ -380,12 +376,11 @@ module MapTree =
 type Shard<'K,'V> = MapTree<'K,'V> []
 type Bucket<'K,'V> = Shard<'K,'V> []
 
-type MutateHead<'V> =
-    struct
-        val mutable Head : 'V list
-    end
-    new(v:'V) = { Head  = [v]}
-    member x.Add(v:'V) = x.Head <- v :: x.Head
+type MutateHead<'V>(head) =
+    let mutable head : 'V list = [head]
+    member __.Add(v:'V) = head <- v :: head
+    member __.Head with get() = head
+
 
 open System.Collections.Generic
 open System
@@ -404,6 +399,7 @@ let inline calcBitMaskDepth itemCount =
         if s = 0 then d
         else go (s >>> 1) (d + 1)
     go itemCount 0
+   
 let inline private pow2 (i:int) = 2 <<< (i - 5) // todo 4 is shard size 2^n
 let inline calcSubBitMask (bitDepth:int) = ~~~(-1 <<< (bitDepth))
 
@@ -438,12 +434,10 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 
 
     //let calcBitMaskDepth itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2)))
-    let mutable bitMaskDepth = (calcBitMaskDepth icount)
-    
-    let mutable bucketBitMask = calcSubBitMask bitMaskDepth
 
     let mutable capacity = (bucket.Length * ShardSize) - 1
-    
+    let mutable bitMaskDepth = (calcBitMaskDepth capacity)
+    let mutable bucketBitMask = calcSubBitMask bitMaskDepth    
     let mutable mapCache = []
     let mutable mapCacheRun = false
 
@@ -458,9 +452,9 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         nary
 
     let mapList () =
-        match mapCache with
-        | [] -> 
-            printfn "Building Map Cache List..."
+        // match mapCache with
+        // | [] -> 
+            //printfn "Building Map Cache List..."
             let mutable result = []
             for bi in 0 .. bucket.Length - 1 do
                 for si in 0 .. ShardSize - 1 do
@@ -469,8 +463,8 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             mapCache <- result
             mapCacheRun <- true
             result                                 
-        | result -> 
-            result
+        // | result -> 
+        //     result
 
     let getMap (key:'K) =
         let kh = key.GetHashCode()
@@ -641,6 +635,20 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         if isEmpty bucket.[bi] then
             bucket.[bi] <- empty
 
+    static member private transpose (fn:MapTree<'K,'V> -> MapTree<'K,'T>) (itemCount:int) (bucket:Shard<'K,'V> []) =
+        let nBucket = Array.zeroCreate<Shard<'K,'T>>(bucket.Length)
+        Tasks.Parallel.For(0, bucket.Length,
+             fun bi ->
+        //for bi in 0 .. bucket.Length - 1 do
+                let shrd = bucket.[bi]
+                for si in 0 .. ShardSize - 1 do
+                    let m = shrd.[si]
+                    if not(isEmpty m) then
+                        if isEmpty nBucket.[bi] then nBucket.[bi] <- Array.zeroCreate<MapTree<'K,'T>>(ShardSize)
+                        nBucket.[bi].[si] <- fn m
+        ) |> ignore
+        ShardMap<'K,'T>(itemCount,nBucket)
+
     member __.Add(k:'K,v:'V) =     
                 
         if resizing then
@@ -784,49 +792,111 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     interface System.Collections.IEnumerable with
         override s.GetEnumerator() = (s.toSeq () :> System.Collections.IEnumerator)
 
-    member private __.getMap () = ()
+    member private __.getBucket () = bucket
 
-    static member Union (unionf:seq<'V> -> 'b) (maps:ShardMap<'K,'V> seq) : ShardMap<'K,'b> =        
-        
-        let processMaps (sources:Bucket<'K,'V> seq,unionf:seq<'V> -> 'T) =
+    static member Union (unionf:seq<'V> -> 'T) (maps:ShardMap<'K,'V> seq) : ShardMap<'K,'T> =        
+        let comparer = LanguagePrimitives.FastGenericComparer<'Key>
+
+        let processMaps (unionf:seq<'V> -> 'T,sources:ShardMap<'K,'V> seq) =
             //let mutable target = Unchecked.defaultof<Bucket<'K,MutateHead<'V>>>
             let enum = sources.GetEnumerator()
+            let tCount = ref 0 
 
-            let rec go(source,target) =
+            let rec go(source:Bucket<'K,'V>,target:Bucket<'K,MutateHead<'V>>) =
                 if source.Length = target.Length then
-                    Tasks.Parallel.For(0,source.Length,
-                        fun bi ->
-                            let sshrd = source.[bi]
-                            let tshrd = target.[bi]
-                            for si in 0 .. ShardSize - 1 do
-                                let sm = sshrd.[si]
-                                if isEmpty sm |> not then
-                                    let mutable tm = tshrd.[si]
-                                    if isEmpty tm then
-                                        tm <- Map.empty
+                    Tasks.Parallel.For(0,source.Length,fun bi ->
+                        let sshrd = source.[bi]
+                        
+                        let mutable tshrd = target.[bi]// target.[bi] << target shard depends on bitdepth
+                            // if isEmpty target.[bi] then
+                            //     let ntshard = Array.zeroCreate<MapTree<'K,_>>(ShardSize)
+                            //     target.[bi] <- ntshard
+                            //     ntshard
+                            // else 
+                            //     target.[bi]
+
+                        for si in 0 .. ShardSize - 1 do
+                            let sm = sshrd.[si]
+                            if isEmpty sm |> not then
+                                let mutable tm = tshrd.[si] //<< target shard depends on bitdepth
+                                if isEmpty tm then
+                                    tCount := Interlocked.Add(tCount,MapTree.size sm)
+                                    tshrd.[si] <- MapTree.map (fun v -> MutateHead<_>(v)) sm
+                                else
                                     tshrd.[si] <-
-                                        MapTree.fold (fun acc k v ->
-                                            match MapTree.tryFind k acc with
+                                        MapTree.fold (fun acc k v -> // for each key in source
+                                            match MapTree.tryFind comparer k acc with // try find in acc target
                                             | Some mh -> 
                                                 mh.Add v
                                                 acc
                                             | None -> 
-                                                MapTree.add k (MutateHead<'V>(v)) acc
+                                                tCount := Interlocked.Increment(tCount)
+                                                MapTree.add comparer k (MutateHead<'V>(v)) acc
                                         ) tm sm
                     ) |> ignore    
                 if enum.MoveNext() then
-                    go(enum.Current,target)
+                    go(enum.Current.getBucket(),target)
+                else
+                    //end of list so map value lists to new dictionary with provided unionf
+                    enum.Dispose()
+                    ShardMap.transpose (MapTree.map (fun (mh:MutateHead<'V>) -> unionf mh.Head )) !tCount target
             
+            // start of enumeration (first shard used to create target interim map)
             if enum.MoveNext() then
-                let bsize = enum.Current.Length
-                let target = Array.zeroCreate<Shard<'K,MutateHead<'V>>>(bsize)
-                go(enum.Current,target)
-
-                transpose (MapTree.map (fun (mh:MutateHead<'V>) -> unionf mh.Head ))
+                let ibucket = enum.Current.getBucket()
+                let target = Array.zeroCreate<Shard<'K,MutateHead<'V>>>(ibucket.Length)
+                for bi in 0 .. ibucket.Length - 1 do
+                    target.[bi] <- Array.zeroCreate<MapTree<'K,MutateHead<'V>>>(ShardSize)
+                go(ibucket,target)
             else
-                ShardMap<'K,'V>(0,[])
+                enum.Dispose()
+                ShardMap<'K,'T>(0,[])
 
-            enum.Dispose()
+            
+        
+        processMaps(unionf,maps)  //<<HACK to get intellisense to work
+
+
+    static member Union2 (unionf:seq<'V> -> 'T) (maps:ShardMap<'K,'V> seq) : ShardMap<'K,'T> =        
+        let comparer = LanguagePrimitives.FastGenericComparer<'Key>
+
+        let processMaps (unionf:seq<'V> -> 'T,sources:ShardMap<'K,'V> seq) =
+            //let mutable target = Unchecked.defaultof<Bucket<'K,MutateHead<'V>>>
+            let enum = sources.GetEnumerator()
+            let tCount = ref 0 
+
+            let rec go(source:ShardMap<'K,'V>,target:ShardMap<'K,MutateHead<'V>>) =
+                let ntarget =                
+                    source.Fold (fun (trgt:ShardMap<'K,MutateHead<'V>>) k v ->
+                        match trgt.TryFind k with
+                        | Some mh -> 
+                            mh.Add v
+                            trgt
+                        | None -> 
+                            tCount := Interlocked.Increment(tCount)
+                            trgt.Add (k,MutateHead<'V>(v))
+                            trgt
+                    ) target 
+
+                if enum.MoveNext() then
+                    go(enum.Current,ntarget)
+                else
+                    //end of list so map value lists to new dictionary with provided unionf
+                    enum.Dispose()
+                    ntarget.Map (fun (mh:MutateHead<'V>) -> unionf mh.Head )
+            
+            // start of enumeration (first shard used to create target interim map)
+            if enum.MoveNext() then
+                let ibucket = enum.Current.getBucket()
+                let targetBucket = Array.zeroCreate<Shard<'K,MutateHead<'V>>>(ibucket.Length)
+                go(enum.Current,ShardMap<_,_>(0,targetBucket))
+            else
+                enum.Dispose()
+                ShardMap<'K,'T>(0,[])
+
+            
+        
+        processMaps(unionf,maps)  //<<HACK to get intellisense to work
 
     ////////////////////////////////////
     /// Contructors
@@ -883,7 +953,18 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 ///////////////////////////////////////////////
 ///////////////////////////////////////////////
 
-let bprint (value:int) = Convert.ToString(value, 2).PadLeft(32, '0')
+let bprint (value:int) = System.Convert.ToString(value, 2).PadLeft(32, '0')
+
+let bsprint (value:uint16) =  System.Convert.ToString(int value, 2).PadLeft(16, '0')
+
+1us <<< 15
+let left1 = 32768us
+left1 >>> 4 |> bsprint
+
+let addbitPos (state:uint16,pos:int) =
+    (1us <<< pos) ||| state |> int |> bprint
+
+let s = addbitPos(0us,7) 
 
 let smap = new ShardMap<_,_>(numberStrings)
 
@@ -1109,3 +1190,86 @@ let union unionf (ms: Map<string,_> seq) =
        |> Seq.map (fun (k,es) -> (k,unionf (Seq.map (fun (KeyValue(_k,v)) -> v) es))) 
        |> Map.ofSeq
 #time
+
+
+let u1 = ShardMap<_,_>(union1)
+let u2 = ShardMap<_,_>(union2)
+let u3 = ShardMap<_,_>(union3)
+let u4 = ShardMap<_,_>(union4)
+
+let b1 = Map<_,_>(union1)
+let b2 = Map<_,_>(union2)
+let b3 = Map<_,_>(union3)
+let b4 = Map<_,_>(union4)
+
+
+for i in 0 .. 10000 do
+    let umap = [u1;u2;u3;u4] |> ShardMap.Union (Seq.sum)
+    ()
+
+for i in 0 .. 10000 do
+    let umap2 = [u1;u2;u3;u4] |> ShardMap.Union2 (Seq.sum)
+    ()
+
+for i in 0 .. 10000 do
+    let bumap = [b1;b2;b3;b4] |> union (Seq.sum)
+    ()
+
+let umap = [u1;u2;u3;u4] |> ShardMap.Union (Seq.sum)
+
+for kvp in umap do
+    printfn "%s = %i" kvp.Key kvp.Value
+umap.Count
+
+let tmh = MutateHead<int>(1)
+tmh.Add 2
+tmh.Add 2
+tmh.Add 4
+tmh.Head
+
+let bsprint (value:uint16) =  System.Convert.ToString(int value, 2).PadLeft(16, '0')
+let left1 = 32768us
+left1 >>> 1 |> bsprint
+
+let addbitPos (state:uint16,pos:int) =
+    (1us <<< pos) ||| state |> int |> bprint
+
+let empty = MutateHead<int>(1)
+let bucket = Array.zeroCreate<MutateHead<int>>(16)
+
+let mutable posMask = 0us
+let positions = [4;9;12;15]
+for i in positions do
+    bucket.[i] <- empty
+    posMask <- (left1 >>> i) ||| posMask
+
+bsprint posMask
+
+let posMaskSearch () = 
+    let rec go (i,acc) =
+        if i < 16 then
+            if ((left1 >>> i) &&& posMask) <> 0us then 
+                go(i + 1,bucket.[i] :: acc)
+            else
+                go(i + 1,acc)
+        else
+            acc
+    go(0,[])        
+
+let itterSearch () =
+    let mutable result = []
+    for i in 0 .. bucket.Length - 1 do
+        let v = bucket.[i]
+        if Object.ReferenceEquals(null,v) |> not then
+            result <- v :: result
+    result        
+
+for i in 0 .. 1000000 do
+    let x = posMaskSearch ()
+    ()
+
+for i in 0 .. 1000000 do
+    let x = itterSearch ()
+    ()
+
+
