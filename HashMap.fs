@@ -1592,6 +1592,17 @@ for i in 0 .. ittrLoops do
         ()
     )
 
+let ittr (enum:IEnumerator<_>) =
+    while enum.MoveNext() do ()
+    enum.Dispose()
+
+//// differnt sequence methods
+for _ in 0 .. 100000 do smap.toSeq()  |> ittr
+for _ in 0 .. 100000 do smap.toSeq2() |> ittr 
+for _ in 0 .. 100000 do smap.toSeq3() |> ittr 
+for _ in 0 .. 100000 do smap.toSeq4() |> ittr 
+
+
 let ls = numberStrings |> Array.map (fun (k,v) -> KeyValuePair<_,_>(k,v) ) |> Array.toList
 for i in 0 .. ittrLoops do
     ls |> Seq.iter (fun kvp -> 
@@ -1694,7 +1705,7 @@ for kvp in umap2 do
     printfn "%s = %i" kvp.Key kvp.Value
 
 umap2.Count
-
+Environment.ProcessorCount
 let tmh = MutateHead<int>(1)
 tmh.Add 2
 tmh.Add 2
