@@ -1129,8 +1129,62 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 
         eachMapInBucket(additions , mapFn)
         // Step through maps to union
-        ShardMap<'K,'T>(!tCount,target)
+        ShardMap<'K,'V>(!tCount,target)
 
+    member __.MergeMap (mapFn:'V -> 'T -> 'V) (mergeMap:ShardMap<'K,'T>) : ShardMap<'K,'V> =
+        let comparer = LanguagePrimitives.FastGenericComparer<'Key>
+        
+        count
+        let target, tCount = // target will be a copy of the bigger of the two maps
+            if mergeMap.BucketSize > bucket.Length then
+                let target = Array.zeroCreate<Shard<'K,'V>>(mergeMap.BucketSize)
+                //Array.Copy(mergeMap.getBucket(),target,mergeMap.BucketSize)
+                target, ref (mergeMap.Count)
+            else
+                let target = Array.zeroCreate<Shard<'K,'V>>(bucket.Length)
+                //Array.Copy(bucket,target,bucket.Length)
+                target,  ref (!countRef)
+                
+        let trgtBitDepth = calcBitMaskDepth ((target.Length * ShardSize) - 1)
+        let bucketBitMask = calcSubBitMask trgtBitDepth
+        
+        let mapFn = 
+            if additions.Length = target.Length then
+                // Split into two types of mapping, one-to-one, and small map expansion
+                ////////////////////////////////////////////////////////////////////////
+                fun bi si sm ->
+                    let tshrd = target.[bi]
+                    let tm = tshrd.[si]
+                    // Buckets same size so simple to one-to-one map
+                    if isEmpty tm then
+                        Interlocked.Add(tCount,MapTree.size sm) |> ignore
+                        tshrd.[si] <- sm
+                    else
+                        tshrd.[si] <-
+                            MapTree.fold (fun acc k v -> // for each key in source
+                                MapTree.addAndIncr comparer k v tCount acc // lookup doubled so might be worth extending Maptree to return both tree & `newAddition' bool
+                            ) tm sm
+             else
+                fun _ si sm ->
+                    // Bucket lower order so shard needs to be remapped to higher order
+                    ///////////////////////////////////////////////////////////////////////
+                    MapTree.iter (fun k v -> // for each key in source
+                        let kh = k.GetHashCode()
+                        let tbi = bucketIndex(kh,bucketBitMask)
+                        let tshrd = target.[tbi]
+                        let tm = tshrd.[si]
+
+                        if isEmpty tm then
+                            Interlocked.Increment(tCount) |> ignore
+                            tshrd.[si] <- MapOne(k,v)
+                        else                                             
+                            tshrd.[si] <- MapTree.addAndIncr comparer k v tCount tm
+                    ) sm
+
+
+        eachMapInBucket(additions , mapFn)
+        // Step through maps to union
+        ShardMap<'K,'V>(!tCount,target)
 
     //////////////////////////
     /////////////////////////////////////
@@ -1724,7 +1778,9 @@ module NameMap =
     let layer (m1 : NameMap<'T>) m2 = m1.Merge m2
 
     /// Not a very useful function - only called in one place - should be changed 
-    let layerAdditive addf m1 m2 = 
+    let layerAdditive addf (m1:NameMap<'T>) (m2:NameMap<'T>) = 
+      //m2.Fold (fun x y sofar -> Map.add x (addf (Map.tryFindMulti x sofar) y))
+
       Map.foldBack (fun x y sofar -> Map.add x (addf (Map.tryFindMulti x sofar) y) sofar) m1 m2
 
     /// Union entries by identical key, using the provided function to union sets of values
@@ -2083,6 +2139,17 @@ umap.Fold (fun s _ v -> s + v) 0
 
 for kvp in umap2 do
     printfn "%s = %i" kvp.Key kvp.Value
+
+//////////////////////////////
+/// merge / layering perf test
+#time
+let smu1 = ShardMap<_,_>(union1)
+let smu2 = ShardMap<_,_>(union2)
+for _ in 0 ..10000 do smu1.Merge(smu2) |> ignore
+smu12.Count
+let bmu1 = Map<_,_>(union1)
+let bmu2 = Map<_,_>(union2)
+for _ in 0 .. 10000 do Map.foldBack Map.add bmu1 bmu2 |> ignore
 
 umap2.Count
 Environment.ProcessorCount
