@@ -4,6 +4,8 @@ open MapOld.MapTree
 open MapTree
 open System.Threading.Tasks
 open System.Security.Cryptography.X509Certificates
+open System.Text
+open NameMap
 
 #nowarn "51"
 #nowarn "69" // interface implementations in augmentations
@@ -402,7 +404,6 @@ type MutateHead<'V>(head) =
     member __.Add(v:'V) = head <- v :: head
     member __.Head with get() = head
 
-
 open System.Collections.Generic
 open System
 open NonStructuralComparison
@@ -438,7 +439,7 @@ let inline private higherRange (index:int,bitdepth:int) = (index ||| (1 <<< (bit
 let inline private newShardEmpty () = Array.zeroCreate<MapTree<'K,'V>>(ShardSize)
 let inline private newBucketEmpty bucketSize = Array.zeroCreate<Shard<'K,'V>>(bucketSize)
 
-let private eachMapInBucket (bucket:Bucket<'K,'V>,f:int -> int -> MapTree<'K,'V> -> unit) =
+let inline private eachMapInBucketClose (bucket:Bucket<'K,'V>,f:int -> int -> MapTree<'K,'V> -> unit,bucketCloseFn:int -> unit) =
     let fo = OptimizedClosures.FSharpFunc<_,_,_,_>.Adapt(f)
     
     Tasks.Parallel.For(0, bucket.Length, fun bi ->
@@ -448,7 +449,11 @@ let private eachMapInBucket (bucket:Bucket<'K,'V>,f:int -> int -> MapTree<'K,'V>
                 let m = s.[si]
                 if not(isEmpty m) then
                     fo.Invoke(bi,si,m)
+        bucketCloseFn bi
     ) |> ignore
+
+let inline private eachMapInBucket (bucket:Bucket<'K,'V>,f:int -> int -> MapTree<'K,'V> -> unit) =
+    eachMapInBucketClose (bucket,f,ignore)
 
 let private getOrCreateShard (bucket:Bucket<'K,'V>,index:int) =
     let mutable shrd = bucket.[index]
@@ -457,7 +462,30 @@ let private getOrCreateShard (bucket:Bucket<'K,'V>,index:int) =
         bucket.[index] <- shrd
     shrd        
 
-    
+/////////////////////////////
+/// Constructor helper
+
+
+let private init<'T,'K,'V when 'K : comparison>(counter:int, items : 'T seq,mapFn: 'T -> KeyValuePair<'K,'V>) =
+    let size = if counter < ShardSize then ShardSize else counter
+    let comparer = LanguagePrimitives.FastGenericComparer<'K>
+    let bitdepth = (calcBitMaskDepth size)
+    let bucketSize = pow2 (bitdepth)
+    let bucketBitMask = calcSubBitMask bitdepth
+    let newBucket = Array.zeroCreate<Shard<'K,'V>>(bucketSize)
+
+    items
+    |> Seq.iter (fun item ->
+        let kvp = mapFn item 
+        let kh = kvp.Key.GetHashCode()
+        let bi = bucketIndex(kh,bucketBitMask)
+        let shrd = getOrCreateShard(newBucket,bi)
+        let si = shardIndex(kh)
+        let m = shrd.[si]
+        shrd.[si] <- if isEmpty m then MapOne (kvp.Key,kvp.Value) else MapTree.add comparer kvp.Key kvp.Value m
+        )
+    (counter,newBucket)
+
 /// Shard Map
 ////////////////////////////
 
@@ -531,60 +559,128 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 
     let bprint (v:int) = Convert.ToString(v, 2)  // todo: remove, only needed for debugging
 
-    let resize () =
+    let resize nsize =
+        let bmd = calcBitMaskDepth nsize
+        let newBucketBitMask = calcSubBitMask bmd
+        let target = Array.zeroCreate<Shard<'K,'V>> (nsize)
+        
+        eachMapInBucket(bucket,fun _ si sm ->
+                    MapTree.iter (fun k v -> // for each key in source
+                        let kh = k.GetHashCode()
+                        let tbi = bucketIndex(kh,newBucketBitMask)
+                        let tshrd = target.[tbi]
+                        let tm = tshrd.[si]
+
+                        if isEmpty tm then
+                            tshrd.[si] <- MapOne(k,v)
+                        else                                             
+                            tshrd.[si] <- MapTree.add comparer k v tm
+                    ) sm
+        )
+
+        for i2 in 0 .. target.Length - 1 do
+            if isEmpty target.[i2] then target.[i2] <- empty
+            
+        //now update internal state
+        lock bucket.SyncRoot (fun () -> bucket <- target ) // ??? needed with resize lock already in place?
+        bitMaskDepth <- bmd
+        bucketBitMask <- newBucketBitMask
+        capacity <- nsize
+
+        // Tasks.Parallel.For(0, bucket.Length, 
+        //     fun i0 ->
+
+        //     //for i0 in 0 .. bucket.Length - 1 do // for each shard in old bucket
+        //         //printfn "newBucket starting %i : %A" i0 newBucket
+        //         let oshrd = bucket.[i0]  //get old shard at index
+        //         let i1 = higherRange(i0,ibmd)
+        //         //printfn "for range i:%i {%s}, higher range i2:%i {%s}" bi (bprint bi) i2 (bprint i2)
+        //         if Object.ReferenceEquals(oshrd,empty) then // special empty shard case
+        //             newBucket.[i0] <- empty
+        //             newBucket.[i1] <- empty
+
+        //         else // shard needs to be split out amoungst two new shards
+
+        //             for j in 0 .. ShardSize - 1 do
+        //                 let m = oshrd.[j]
+        //                 if not(isEmpty m) then
+        //                     let m1,m0 = MapTree.partition comparer (fun k _ -> ((k.GetHashCode() >>> (ibmd )) &&& 0b1) = 1) m //<<<CHECK
+                            
+        //                     if not (MapTree.isEmpty m0) then
+        //                         let shrd0 = getOrCreateShard( newBucket, i0)
+        //                         if isEmpty shrd0.[j] then
+        //                             shrd0.[j] <- m0
+                                
+        //                     if not (MapTree.isEmpty m1) then
+        //                         let shrd1 = getOrCreateShard( newBucket , i1)
+        //                         if isEmpty shrd1.[j] then
+        //                             shrd1.[j] <- m1
+        // ) |> ignore                            
+                            
+        // // after copying, check if buckets still empty and add empty shard if null
+        // for i2 in 0 .. newBucket.Length - 1 do
+        //     if isEmpty newBucket.[i2] then newBucket.[i2] <- empty
+            
+        // //now update internal state
+        // lock bucket.SyncRoot (fun () -> bucket <- newBucket ) // ??? needed with resize lock already in place?
+        // bitMaskDepth <- calcBitMaskDepth !countRef
+        // bucketBitMask <- calcSubBitMask bitMaskDepth
+        // capacity <- (newBucket.Length * ShardSize) - 1
+
+    let grow () =
 
         //printfn "started resize ()"
         let isize = bucket.Length
         let nsize = isize * 2
-        let ibmd = bitMaskDepth
+        resize nsize
         
-        //printfn "ibmd : %i / isize: %i" ibmd isize
+        // //printfn "ibmd : %i / isize: %i" ibmd isize
         
-        let newBucket = Array.zeroCreate<Shard<'K,'V>> (nsize)
-        //printfn "new bucket of %i size created" nsize
+        // let newBucket = Array.zeroCreate<Shard<'K,'V>> (nsize)
+        // //printfn "new bucket of %i size created" nsize
         
-        Tasks.Parallel.For(0, bucket.Length, 
-            fun i0 ->
+        // Tasks.Parallel.For(0, bucket.Length, 
+        //     fun i0 ->
 
-            //for i0 in 0 .. bucket.Length - 1 do // for each shard in old bucket
-                //printfn "newBucket starting %i : %A" i0 newBucket
-                let oshrd = bucket.[i0]  //get old shard at index
-                let i1 = higherRange(i0,ibmd)
-                //printfn "for range i:%i {%s}, higher range i2:%i {%s}" bi (bprint bi) i2 (bprint i2)
-                if Object.ReferenceEquals(oshrd,empty) then // special empty shard case
-                    newBucket.[i0] <- empty
-                    newBucket.[i1] <- empty
+        //     //for i0 in 0 .. bucket.Length - 1 do // for each shard in old bucket
+        //         //printfn "newBucket starting %i : %A" i0 newBucket
+        //         let oshrd = bucket.[i0]  //get old shard at index
+        //         let i1 = higherRange(i0,ibmd)
+        //         //printfn "for range i:%i {%s}, higher range i2:%i {%s}" bi (bprint bi) i2 (bprint i2)
+        //         if Object.ReferenceEquals(oshrd,empty) then // special empty shard case
+        //             newBucket.[i0] <- empty
+        //             newBucket.[i1] <- empty
 
-                else // shard needs to be split out amoungst two new shards
+        //         else // shard needs to be split out amoungst two new shards
 
-                    for j in 0 .. ShardSize - 1 do
-                        let m = oshrd.[j]
-                        if not(isEmpty m) then
-                            let m1,m0 = MapTree.partition comparer (fun k _ -> ((k.GetHashCode() >>> (ibmd )) &&& 0b1) = 1) m //<<<CHECK
+        //             for j in 0 .. ShardSize - 1 do
+        //                 let m = oshrd.[j]
+        //                 if not(isEmpty m) then
+        //                     let m1,m0 = MapTree.partition comparer (fun k _ -> ((k.GetHashCode() >>> (ibmd )) &&& 0b1) = 1) m //<<<CHECK
                             
-                            if not (MapTree.isEmpty m0) then
-                                let shrd0 = getOrCreateShard( newBucket, i0)
-                                if isEmpty shrd0.[j] then
-                                    shrd0.[j] <- m0
+        //                     if not (MapTree.isEmpty m0) then
+        //                         let shrd0 = getOrCreateShard( newBucket, i0)
+        //                         if isEmpty shrd0.[j] then
+        //                             shrd0.[j] <- m0
                                 
-                            if not (MapTree.isEmpty m1) then
-                                let shrd1 = getOrCreateShard( newBucket , i1)
-                                if isEmpty shrd1.[j] then
-                                    shrd1.[j] <- m1
-        ) |> ignore                            
+        //                     if not (MapTree.isEmpty m1) then
+        //                         let shrd1 = getOrCreateShard( newBucket , i1)
+        //                         if isEmpty shrd1.[j] then
+        //                             shrd1.[j] <- m1
+        // ) |> ignore                            
                             
-        // after copying, check if buckets still empty and add empty shard if null
-        for i2 in 0 .. newBucket.Length - 1 do
-            if isEmpty newBucket.[i2] then newBucket.[i2] <- empty
+        // // after copying, check if buckets still empty and add empty shard if null
+        // for i2 in 0 .. newBucket.Length - 1 do
+        //     if isEmpty newBucket.[i2] then newBucket.[i2] <- empty
             
-        //now update internal state
-        lock bucket.SyncRoot (fun () -> bucket <- newBucket ) // ??? needed with resize lock already in place?
-        bitMaskDepth <- calcBitMaskDepth !countRef
-        bucketBitMask <- calcSubBitMask bitMaskDepth
-        capacity <- (newBucket.Length * ShardSize) - 1
-        //printfn "finished resizing operations"
+        // //now update internal state
+        // lock bucket.SyncRoot (fun () -> bucket <- newBucket ) // ??? needed with resize lock already in place?
+        // bitMaskDepth <- calcBitMaskDepth !countRef
+        // bucketBitMask <- calcSubBitMask bitMaskDepth
+        // capacity <- (newBucket.Length * ShardSize) - 1
+        // //printfn "finished resizing operations"
 
-
+    
     let add(k:'K,v:'V) =
         let kh = k.GetHashCode()
         let bi = bucketIndex(kh,bucketBitMask)
@@ -720,7 +816,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             if !countRef > capacity then
             // base array needs resizing
                 resizing <- true
-                lock resizeLock resize 
+                lock resizeLock grow
                 //End of Lock
                 resizing <- false
             add(k,v)
@@ -1131,60 +1227,73 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         // Step through maps to union
         ShardMap<'K,'V>(!tCount,target)
 
-    member __.MergeMap (mapFn:'V -> 'T -> 'V) (mergeMap:ShardMap<'K,'T>) : ShardMap<'K,'V> =
-        let comparer = LanguagePrimitives.FastGenericComparer<'Key>
+    // member __.MergeMap (mapFn:'V -> 'T -> 'V) (mergeMap:ShardMap<'K,'T>) : ShardMap<'K,'V> =
+    //     let comparer = LanguagePrimitives.FastGenericComparer<'Key>
         
-        count
-        let target, tCount = // target will be a copy of the bigger of the two maps
-            if mergeMap.BucketSize > bucket.Length then
-                let target = Array.zeroCreate<Shard<'K,'V>>(mergeMap.BucketSize)
-                //Array.Copy(mergeMap.getBucket(),target,mergeMap.BucketSize)
-                target, ref (mergeMap.Count)
-            else
-                let target = Array.zeroCreate<Shard<'K,'V>>(bucket.Length)
-                //Array.Copy(bucket,target,bucket.Length)
-                target,  ref (!countRef)
+    //     let target, tCount, applyFn = // target will be a copy of the bigger of the two maps
+    //         if mergeMap.BucketSize > bucket.Length then
+    //             // target will be size of incoming mergemap, so resize internal & provide 1-1 mapFn
+    //             let target = Array.zeroCreate<Shard<'K,'V>>(mergeMap.BucketSize)
+    //             let tCount = ref (mergeMap.Count)
+    //             lock resizeLock (fun () -> resize mergeMap.BucketSize)
+    //             target , tCount , 
+    //             (fun bi si sm ->
+    //                 let tshrd = target.[bi]
+    //                 let tm = tshrd.[si]
+    //                 // Buckets same size so simple to one-to-one map
+    //                 if isEmpty tm then
+    //                     Interlocked.Add(tCount,MapTree.size sm) |> ignore
+    //                     tshrd.[si] <-  sm
+    //                 else
+    //                     tshrd.[si] <-
+    //                         MapTree.fold (fun acc k v -> // for each key in source
+    //                             MapTree.addAndIncr comparer k v tCount acc // lookup doubled so might be worth extending Maptree to return both tree & `newAddition' bool
+    //                         ) tm sm)
+    //         else
+    //             let target = Array.zeroCreate<Shard<'K,'V>>(bucket.Length)
+    //             Array.Copy(bucket,target,bucket.Length)
+    //             Array.zeroCreate<Shard<'K,'V>>(bucket.Length) , ref (!countRef)
                 
-        let trgtBitDepth = calcBitMaskDepth ((target.Length * ShardSize) - 1)
-        let bucketBitMask = calcSubBitMask trgtBitDepth
+    //     let trgtBitDepth = calcBitMaskDepth ((target.Length * ShardSize) - 1)
+    //     let bucketBitMask = calcSubBitMask trgtBitDepth
         
-        let mapFn = 
-            if additions.Length = target.Length then
-                // Split into two types of mapping, one-to-one, and small map expansion
-                ////////////////////////////////////////////////////////////////////////
-                fun bi si sm ->
-                    let tshrd = target.[bi]
-                    let tm = tshrd.[si]
-                    // Buckets same size so simple to one-to-one map
-                    if isEmpty tm then
-                        Interlocked.Add(tCount,MapTree.size sm) |> ignore
-                        tshrd.[si] <- sm
-                    else
-                        tshrd.[si] <-
-                            MapTree.fold (fun acc k v -> // for each key in source
-                                MapTree.addAndIncr comparer k v tCount acc // lookup doubled so might be worth extending Maptree to return both tree & `newAddition' bool
-                            ) tm sm
-             else
-                fun _ si sm ->
-                    // Bucket lower order so shard needs to be remapped to higher order
-                    ///////////////////////////////////////////////////////////////////////
-                    MapTree.iter (fun k v -> // for each key in source
-                        let kh = k.GetHashCode()
-                        let tbi = bucketIndex(kh,bucketBitMask)
-                        let tshrd = target.[tbi]
-                        let tm = tshrd.[si]
+    //     let mapFn = 
+    //         if additions.Length = target.Length then
+    //             // Split into two types of mapping, one-to-one, and small map expansion
+    //             ////////////////////////////////////////////////////////////////////////
+    //             fun bi si sm ->
+    //                 let tshrd = target.[bi]
+    //                 let tm = tshrd.[si]
+    //                 // Buckets same size so simple to one-to-one map
+    //                 if isEmpty tm then
+    //                     Interlocked.Add(tCount,MapTree.size sm) |> ignore
+    //                     tshrd.[si] <- sm
+    //                 else
+    //                     tshrd.[si] <-
+    //                         MapTree.fold (fun acc k v -> // for each key in source
+    //                             MapTree.addAndIncr comparer k v tCount acc // lookup doubled so might be worth extending Maptree to return both tree & `newAddition' bool
+    //                         ) tm sm
+    //          else
+    //             fun _ si sm ->
+    //                 // Bucket lower order so shard needs to be remapped to higher order
+    //                 ///////////////////////////////////////////////////////////////////////
+    //                 MapTree.iter (fun k v -> // for each key in source
+    //                     let kh = k.GetHashCode()
+    //                     let tbi = bucketIndex(kh,bucketBitMask)
+    //                     let tshrd = target.[tbi]
+    //                     let tm = tshrd.[si]
 
-                        if isEmpty tm then
-                            Interlocked.Increment(tCount) |> ignore
-                            tshrd.[si] <- MapOne(k,v)
-                        else                                             
-                            tshrd.[si] <- MapTree.addAndIncr comparer k v tCount tm
-                    ) sm
+    //                     if isEmpty tm then
+    //                         Interlocked.Increment(tCount) |> ignore
+    //                         tshrd.[si] <- MapOne(k,v)
+    //                     else                                             
+    //                         tshrd.[si] <- MapTree.addAndIncr comparer k v tCount tm
+    //                 ) sm
 
 
-        eachMapInBucket(additions , mapFn)
-        // Step through maps to union
-        ShardMap<'K,'V>(!tCount,target)
+    //     eachMapInBucket(additions , mapFn)
+    //     // Step through maps to union
+    //     ShardMap<'K,'V>(!tCount,target)
 
     //////////////////////////
     /////////////////////////////////////
@@ -1675,85 +1784,68 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         let target = Array.zeroCreate<Shard<'K,MutateHead<'V>>>(maxBucket)
         threadBuckets(buckets ,target)
 
+
+    static member private init<'T>(counter:int, items : 'T seq,mapFn: 'T -> KeyValuePair<'K,'V>) =
+        let size = if counter < ShardSize then ShardSize else counter
+        let comparer = LanguagePrimitives.FastGenericComparer<'Key>
+        let bitdepth = (calcBitMaskDepth size)
+        let bucketSize = pow2 (bitdepth)
+        let bucketBitMask = calcSubBitMask bitdepth
+        let newBucket = Array.zeroCreate<Shard<'K,'V>>(bucketSize)
+
+        items
+        |> Seq.iter (fun item ->
+            let kvp = mapFn item 
+            let kh = kvp.Key.GetHashCode()
+            let bi = bucketIndex(kh,bucketBitMask)
+            let shrd = getOrCreateShard(newBucket,bi)
+            let si = shardIndex(kh)
+            let m = shrd.[si]
+            shrd.[si] <- if isEmpty m then MapOne (kvp.Key,kvp.Value) else MapTree.add comparer kvp.Key kvp.Value m
+            )
+        
+        ShardMap<'K,'V>(counter,newBucket)
+
+    static member OfKeyedList (keyFn:'V -> 'K) (items:'V list) = ShardMap<'K,'V>.init(List.length items,items,fun v -> KeyValuePair<'K,'V>(keyFn v,v))
+    static member OfSeq (keyFn:'V -> 'K) (keyValueTuples:'V seq) = 
+        let mutable counter = 0
+        let mutable items = []
+        keyValueTuples |> Seq.iter (fun kvp -> 
+            counter <- counter + 1
+            items <- kvp :: items
+        )
+        ShardMap<'K,'V>.init<_>(counter,items,fun v -> KeyValuePair<'K,'V>(keyFn v,v))
+
+    static member OfArray(keyValueTuples:('K * 'V) []) = 
+        ShardMap<'K,'V>.init<_>(keyValueTuples.Length,keyValueTuples,fun (k,v) -> KeyValuePair<'K,'V>(k,v))
+    
     ////////////////////////////////////
     /// Contructors
     ///////////////////////////////////
-
-    new(counter:int,items:('K * 'V) seq) =
-        let size = if counter < ShardSize then ShardSize else counter
-        let comparer = LanguagePrimitives.FastGenericComparer<'Key>
+    
+    new(capacity:int) =
+        let size = if capacity < ShardSize then ShardSize else capacity
         let bitdepth = (calcBitMaskDepth size)
         let bucketSize = pow2 (bitdepth)
-        let bucketBitMask = calcSubBitMask bitdepth
         let newBucket = Array.zeroCreate<Shard<'K,'V>>(bucketSize)
+        ShardMap<_,_>(0,newBucket)
 
-        items
-        |> Seq.iter (fun (k,v) -> 
-            let kh = k.GetHashCode()
-            let bi = bucketIndex(kh,bucketBitMask)
-            let shrd = getOrCreateShard(newBucket,bi)
-            let si = shardIndex(kh)
-            let m = shrd.[si]
-            shrd.[si] <- 
-                if isEmpty m then
-                    //printfn "$| creating new map for key:'%A' [%i][%i] for value:%A" k bi si v
-                    MapOne (k,v)
-                else
-                    //printfn "+| adding key:'%A' [%i][%i] for value:%A to map {%A}" k bi si v m
-                    MapTree.add comparer k v m                        
-            )
-        //now allocate any empties that were not filled
-        
-        ShardMap<'K,'V>(counter,newBucket)
+    new(count:int,kvps:('K * 'V) list) = let count,bucket = init<_,'K,'V>(count, kvps ,fun (k,v) -> KeyValuePair<'K,'V>(k,v)) in ShardMap<'K,'V>(count,bucket)
+    new(kvps:('K * 'V) list) = ShardMap<'K,'V>(List.length kvps,kvps)
 
-    new(counter:int,items:'V seq,keyFn:'V -> 'K) =
-        let size = if counter < ShardSize then ShardSize else counter
-        let comparer = LanguagePrimitives.FastGenericComparer<'Key>
-        let bitdepth = (calcBitMaskDepth size)
-        let bucketSize = pow2 (bitdepth)
-        let bucketBitMask = calcSubBitMask bitdepth
-        let newBucket = Array.zeroCreate<Shard<'K,'V>>(bucketSize)
+    new(kvps:('K * 'V) [])   = let count,bucket = init<_,'K,'V>(kvps.Length, kvps ,fun (k,v) -> KeyValuePair<'K,'V>(k,v)) in ShardMap<'K,'V>(count,bucket)
 
-        items
-        |> Seq.iter (fun v ->
-            let k = keyFn v
-            let kh = k.GetHashCode()
-            let bi = bucketIndex(kh,bucketBitMask)
-            let shrd = getOrCreateShard(newBucket,bi)
-            let si = shardIndex(kh)
-            let m = shrd.[si]
-            shrd.[si] <- 
-                if isEmpty m then
-                    //printfn "$| creating new map for key:'%A' [%i][%i] for value:%A" k bi si v
-                    MapOne (k,v)
-                else
-                    //printfn "+| adding key:'%A' [%i][%i] for value:%A to map {%A}" k bi si v m
-                    MapTree.add comparer k v m                        
-            )
-        //now allocate any empties that were not filled
-        
-        ShardMap<'K,'V>(counter,newBucket)
-
-    new(kvps:'V seq,keyFn:'V -> 'K) =       
+    new(count: int, kvps:('K * 'V) seq)  = 
+        let count,bucket = init<_,'K,'V>(count, kvps ,fun (k,v) -> KeyValuePair<'K,'V>(k,v)) in ShardMap<'K,'V>(count,bucket)
+    new(kvps:('K * 'V) seq)  = 
         let mutable counter = 0
         let mutable items = []
         kvps |> Seq.iter (fun kvp -> 
             counter <- counter + 1
             items <- kvp :: items
         )
-        ShardMap<_,_>(counter,items,keyFn)
-
-    new(kvps:('K * 'V) seq) =       
-        let mutable counter = 0
-        let mutable items = []
-        kvps |> Seq.iter (fun kvp -> 
-            counter <- counter + 1
-            items <- kvp :: items
-        )
-        ShardMap<_,_>(counter,items)
-
-    new(kvps:('K * 'V) []) =      
-        ShardMap<_,_>(kvps.Length,kvps)
+        ShardMap<'K,'V>(counter,kvps)
+    
         
 
 ///////////////////////////////////////////////
@@ -1771,17 +1863,18 @@ module NameMap =
     let foldBack f (m:NameMap<'T>) z = m.FoldBack f z
     let forall f (m:NameMap<'T>) = m.FoldBack (fun x y acc -> acc && f x y)  true
     let exists f (m:NameMap<'T>) = m.Exists f
-    let ofKeyedList f l = NameMap<'T>(List.length l,l,f)
-    let ofList l : NameMap<'T> = NameMap<'T>(l)
-    let ofSeq l : NameMap<'T> = NameMap<'T>(l)
+    let ofKeyedList f l = NameMap<'T>.OfKeyedList f l
+    let ofList (l:(string * 'T) list) = NameMap<'T>(l)
+    let ofSeq (l:(string * 'T) seq) = NameMap<'T>(l)
     let toList (l: NameMap<'T>) = l.Fold (fun acc k v -> (k,v) :: acc ) []
     let layer (m1 : NameMap<'T>) m2 = m1.Merge m2
 
     /// Not a very useful function - only called in one place - should be changed 
-    let layerAdditive addf (m1:NameMap<'T>) (m2:NameMap<'T>) = 
-      //m2.Fold (fun x y sofar -> Map.add x (addf (Map.tryFindMulti x sofar) y))
+    let layerAdditive addf (m1:NameMap<'T list>) (m2:NameMap<'T>) =
+        //HACK: this should be done by speacialised parallel imlimentation 
+        m2.FoldBack (fun x y (acc:NameMap<'T list>) -> acc.Add(x, (addf (match acc.TryFind x with Some v -> v | None -> [] ) y)) ; acc ) m1
 
-      Map.foldBack (fun x y sofar -> Map.add x (addf (Map.tryFindMulti x sofar) y) sofar) m1 m2
+    //Map.foldBack (fun x y sofar -> Map.add x (addf (Map.tryFindMulti x sofar) y) sofar) m1 m2
 
     /// Union entries by identical key, using the provided function to union sets of values
     let union unionf (ms: NameMap<_> list) = NameMap.UnionParallel unionf ms
@@ -2260,3 +2353,47 @@ IO.File.WriteAllLines(@"F:\Code\MapTests\unionPairs.csv",umap2 |> Seq.map (fun k
 
 calcBitMaskDepth Environment.ProcessorCount
 64 >>> 3
+
+
+type ArrayCursor<'T> =
+    struct
+        val private iary : 'T []
+        val position : int
+    end
+    static member empty (ac:ArrayCursor<'T>) = ac.position = -1 
+    static member itemNext (ac:ArrayCursor<'T>) = 
+        if ac.position + 1 < ac.iary.Length then 
+            ac.iary.[ac.position + 1] , ArrayCursor<'T>(ac.iary,ac.position + 1) 
+        else 
+            Unchecked.defaultof<'T> , ArrayCursor<'T>(ac.iary,-1)
+    static member next (ac:ArrayCursor<'T>) = ArrayCursor<'T>(ac.iary,if ac.position + 1 > ac.iary.Length then -1 else ac.position + 1)
+    static member prev (ac:ArrayCursor<'T>) = ArrayCursor<'T>(ac.iary,if ac.position - 1 < 0 then -1 else ac.position - 1)
+    static member jump (ac:ArrayCursor<'T>) (pos:int) = ArrayCursor<'T>(ac.iary,if pos < ac.iary.Length && pos > 0 then pos else -1 )
+    static member item (ac:ArrayCursor<'T>) = ac.iary.[ac.position]
+    static member jumpItem (ac:ArrayCursor<'T>) (pos:int) = if pos < ac.iary.Length && pos > 0 then ac.iary.[pos] else failwithf "Out of index exception"
+    new (ary: 'T [],pos) = { iary = ary ; position = pos } // include pos bounds check on constructor 
+    new (ary: 'T []) = { iary = ary ; position = 0 }
+
+let inline (!+) (ac:ArrayCursor<'T>) = ArrayCursor<'T>.itemNext ac
+let inline (~+) (ac:ArrayCursor<'T>) = ArrayCursor<'T>.next ac
+let inline (~-) (ac:ArrayCursor<'T>) = ArrayCursor<'T>.prev ac
+let inline (!) (ac:ArrayCursor<'T>) = ArrayCursor<'T>.item ac
+let inline (@) (ac:ArrayCursor<'T>) (pos:int) = ArrayCursor<'T>.jump ac pos
+let inline (!) (ac:ArrayCursor<'T>) (pos:int) = ArrayCursor<'T>.jumpItem ac pos
+
+type 'T cur = ArrayCursor<'T>
+
+let toCursor (a: int []) : int cur =  ArrayCursor<_>(a)
+
+module Array =
+    let toArrayCursor x = ArrayCursor<_>(x,0)
+
+let acur = ArrayCursor<'T>([|1;2;3|])
+let h,tail = !+acur
+let nextCur = +acur
+let prevCur = -acur
+let value = !acur
+let jumpCur = acur @ 4
+let jumpVal = acur ! 5
+
+let v = @myAryCur
