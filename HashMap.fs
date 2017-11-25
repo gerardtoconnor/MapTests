@@ -9,6 +9,7 @@ open NameMap
 open System.Net.Http
 open System.Diagnostics
 open NameMap
+open SampleData
 
 #nowarn "51"
 #nowarn "69" // interface implementations in augmentations
@@ -227,7 +228,26 @@ module private MapTree =
               | _ -> 
                   let sk,sv,r' = spliceOutSuccessor r 
                   mk l sk sv r'
-            else rebalance l k2 v2 (remove comparer k r) 
+            else rebalance l k2 v2 (remove comparer k r)
+
+    let rec removeDecr (comparer: IComparer<'Value>) k (count:int ref) m = 
+        match m with 
+        | MapEmpty -> empty
+        | MapOne(k2,_) -> 
+            let c = comparer.Compare(k,k2) 
+            if c = 0 then Interlocked.Decrement(count) |> ignore ; MapEmpty else m
+        | MapNode(k2,v2,l,r,_) -> 
+            let c = comparer.Compare(k,k2) 
+            if c < 0 then rebalance (removeDecr comparer k count l) k2 v2 r
+            elif c = 0 then
+              Interlocked.Decrement(count) |> ignore            
+              match l,r with 
+              | MapEmpty,_ -> r
+              | _,MapEmpty -> l
+              | _ -> 
+                  let sk,sv,r' = spliceOutSuccessor r 
+                  mk l sk sv r'
+            else rebalance l k2 v2 (removeDecr comparer k count r) 
 
     let rec mem (comparer: IComparer<'Value>) k m = 
         match m with 
@@ -563,16 +583,18 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     let bprint (v:int) = Convert.ToString(v, 2)  // todo: remove, only needed for debugging
 
     let resize newBucketSize =
-        let capacityLimit = newBucketSize * ShardSize
+        let capacityLimit = (newBucketSize * ShardSize) - 1 
         let bmd = calcBitMaskDepth capacityLimit
         let newBucketBitMask = calcSubBitMask bmd
         let target = Array.zeroCreate<Shard<'K,'V>> (newBucketSize)
+        printfn "resizing: capacity:%i bitMaskDepth:%i buckBitMask:%i newBucketSize:%i" capacityLimit bmd newBucketBitMask newBucketSize
         
         eachMapInBucket(bucket,fun _ si sm ->
                     MapTree.iter (fun k v -> // for each key in source
                         let kh = k.GetHashCode()
                         let tbi = bucketIndex(kh,newBucketBitMask)
-                        let tshrd = target.[tbi]
+                        if tbi >= target.Length || tbi < 0 then printfn "outside of bounds tbi:%i len:%i" tbi target.Length
+                        let tshrd = getOrCreateShard(target,tbi)
                         let tm = tshrd.[si]
 
                         if isEmpty tm then
@@ -720,8 +742,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         if isEmpty m then
             raise <| KeyNotFoundException(sprintf "Key:'%A' not found in map so cannot remove" k)
         else
-            Interlocked.Decrement(countRef) |> ignore
-            shrd.[si] <- MapTree.remove comparer k m
+            shrd.[si] <- MapTree.removeDecr comparer k countRef m
    
     // let transpose (fn:MapTree<'K,'V> -> MapTree<'K,'T>) =
     //     let nBucket = Array.zeroCreate<Shard<'K,'T>>(bucket.Length)
@@ -832,7 +853,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         )
         ShardMap<'K,'T>(itemCount,nBucket)
 
-    member private __.resize newBucketSize = resize newBucketSize
+    member private __.resize = resize //newBucketSize = resize newBucketSize
 
     member __.Add(k:'K,v:'V) =     
                 
@@ -1440,11 +1461,14 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
                         Interlocked.Increment(tCount) |> ignore
                         shrd.[si] <- MapTree.add comparer k [h] m
                 go t
+
+        go ls
         
         let result = ShardMap<'K,'T list>(!tCount,target)
-        let optSize = !tCount |> calcBitMaskDepth  |> pow2 
-        if bucketSize < optSize then
-            result.resize optSize
+        let optSize = !tCount |> calcBitMaskDepth  |> pow2
+        printfn "count %A, optSize %A" !tCount optSize
+        // if bucketSize < optSize then
+        //     result.resize optSize
         result
     
     
@@ -2089,8 +2113,38 @@ let amem = GC.GetTotalMemory true
 
 GC.Collect()
 let beforemem = GC.GetTotalMemory true
+
+#time
 let smap = new ShardMap<_,_>(numberStrings)
+let a1 = numberStrings.[0 .. (numberStrings.Length / 2) - 1]
+let a2 = numberStrings.[(numberStrings.Length / 2) .. numberStrings.Length - 1]
+
+numberStrings.Length
+a1.Length
+a2.Length
+
+for (k,_) in a1 do
+    smap.Remove(k)
+smap.Count
+
+for (k,_) in a1 do
+    match smap.TryFind(k) with
+    | Some v -> printfn "ERROR: removed key %s|%s found after removal" k v
+    | None -> ()
+
+for (k,_) in a2 do
+    match smap.TryFind(k) with
+    | Some _ -> ()
+    | None -> printfn "ERROR: key %s no longer exists without being removed" k
+
+
 let aftermem = GC.GetTotalMemory true
+
+calcSubBitMask (11 - 4)
+
+ShardMap.LayerAdditive ()
+let vlist = List.ofArray numberStrings
+let ll = ShardMap.LayerList (fun (k,v) -> k) vlist
 
 let nmap = smap.Map int
 nmap.["98549420"]
@@ -2107,6 +2161,12 @@ Tasks.Parallel.For(0,sample2.Length, fun i ->
     let k,_ = numberStrings.[i] 
     smap.[k] |> ignore
 )
+
+smap.BucketSize
+smap.Count
+
+
+let maxVal = 0b11111111111
 
 sample2.Length
 
@@ -2162,7 +2222,10 @@ smap.Count
 smap |> Seq.length
 smap.PrintLayout()
 
-calcBitMaskDepth smap.Count
+calcBitMaskDepth 15 // smap.Count
+let inline pow2 (i:int) = 2 <<< (i - 5)
+pow2 5
+
 List.length sml
 
 smap.ExistsPar (fun _ v -> v = "3002087")
@@ -2191,8 +2254,17 @@ for i in 0 .. 10000 do
     ()
 
 for i in 0 .. 10000 do
-    let smap = new ShardMap<_,_>(numberStrings)
+    let smap = ShardMap<_,_>(numberStrings)
     ()
+
+let map64 = ShardMap<_,_>(int64Samples)
+let lookuploops = 10000
+for i in 0 .. lookuploops do
+    for (k,v) in int64Samples do
+        if map64.[k] <> v then printfn "ERROR ON KEY MATCH: %A" k
+
+map64.Count
+map64.BucketSize
 
 ///////////////
 let lookuploops = 10000
