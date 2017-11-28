@@ -2115,7 +2115,9 @@ GC.Collect()
 let beforemem = GC.GetTotalMemory true
 
 #time
-let smap = new ShardMap<_,_>(numberStrings)
+
+open SampleData
+let smap = ShardMap<_,_>(numberStrings)
 let a1 = numberStrings.[0 .. (numberStrings.Length / 2) - 1]
 let a2 = numberStrings.[(numberStrings.Length / 2) .. numberStrings.Length - 1]
 
@@ -2124,7 +2126,7 @@ a1.Length
 a2.Length
 
 for (k,_) in a1 do
-    smap.Remove(k)
+    smap.RemoveThis(k)
 smap.Count
 
 for (k,_) in a1 do
@@ -2143,9 +2145,16 @@ let aftermem = GC.GetTotalMemory true
 calcSubBitMask (11 - 4)
 
 ShardMap.LayerAdditive ()
-let vlist = List.ofArray numberStrings
-let ll = ShardMap.LayerList (fun (k,v) -> k) vlist
 
+let mutable llt = []
+for _ in 0 .. 5 do
+    for item in numberStrings do
+        llt <- item :: llt
+
+llt.Length
+let ll = ShardMap.LayerList (fun (k,v) -> k) llt
+for kvp in ll do
+    printfn ">>%A:%A" kvp.Key kvp.Value
 let nmap = smap.Map int
 nmap.["98549420"]
 //    ("98549420","1618963");

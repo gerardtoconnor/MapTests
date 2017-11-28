@@ -1,4 +1,8 @@
+#if INTERACTIVE
+#load "SampleData.fs"
+#else
 namespace Internal.Utilities.Collections
+#endif
 
 open Microsoft.FSharp.Core
 open Microsoft.FSharp.Core.Operators
@@ -7,6 +11,7 @@ open System
 open System.Threading
 open System.Collections.Generic
 open System.Collections.Concurrent
+open System.ComponentModel.DataAnnotations.Schema
 // open Internal.Utilities
 // open Internal.Utilities.Collections
 
@@ -17,6 +22,15 @@ type private MapTree<'Key,'T> =
     | MapEmpty
     | MapOne of 'Key * 'T
     | MapNode of 'Key * 'T * MapTree<'Key,'T> *  MapTree<'Key,'T> * int
+
+type Opt<'T> =
+    struct
+        val Val: 'T
+        val Exists : bool
+    end
+    new (value:'T,exists) = { Val = value ; Exists = exists }
+    static member None with get() = Opt<'T>(Unchecked.defaultof<'T>,false)
+    static member inline Some value = Opt<'T>(value,true)
 
 
 [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
@@ -121,6 +135,32 @@ module private MapTree =
             if c < 0 then tryFind comparer k l
             elif c = 0 then Some v2
             else tryFind comparer k r
+
+    let rec tryGetValue (comparer: IComparer<'Value>) k (out:byref<'V>) m = 
+        match m with 
+        | MapEmpty -> false
+        | MapOne(k2,v2) -> 
+            let c = comparer.Compare(k,k2) 
+            if c = 0 then out <- v2 ; true
+            else false
+        | MapNode(k2,v2,l,r,_) -> 
+            let c = comparer.Compare(k,k2) 
+            if c < 0 then tryGetValue comparer k &out l
+            elif c = 0 then out <- v2 ; true
+            else tryGetValue comparer k &out r
+
+    let rec tryFindOpt (comparer: IComparer<'Value>) k m = 
+        match m with 
+        | MapEmpty -> Opt.None
+        | MapOne(k2,v2) -> 
+            let c = comparer.Compare(k,k2) 
+            if c = 0 then Opt.Some v2
+            else Opt.None
+        | MapNode(k2,v2,l,r,_) -> 
+            let c = comparer.Compare(k,k2) 
+            if c < 0 then tryFindOpt comparer k l
+            elif c = 0 then Opt.Some v2
+            else tryFindOpt comparer k r
 
     let partition1 (comparer: IComparer<'Value>) (f:OptimizedClosures.FSharpFunc<_,_,_>) k v (acc1,acc2) = 
         if f.Invoke(k, v) then (add comparer k v acc1,acc2) else (acc1,add comparer k v acc2) 
@@ -371,7 +411,10 @@ type private MutateHead<'V>(head) =
     let mutable head : 'V list = [head]
     member __.Add(v:'V) = head <- v :: head
     member __.Head with get() = head
-    
+
+
+
+
 module private util =
 
     open NonStructuralComparison
@@ -455,6 +498,7 @@ module private util =
         (counter,newBucket)
 
 open util
+open MapTree
 
     /// Shard Map
     ////////////////////////////
@@ -507,13 +551,27 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             raise <| KeyNotFoundException(sprintf "Key:%A , does not exist in the dictionary" key)
         else
             MapTree.find comparer key m
-
+    
     let tryFind (key:'K) =
         let m = getMap key
         if util.isEmpty m then
             None
         else
             MapTree.tryFind comparer key m
+
+    let tryGetValue (key:'K,out:byref<'V>) =
+        let m = getMap key
+        if util.isEmpty m then
+            false
+        else
+            MapTree.tryGetValue comparer key &out m
+
+    let tryFindOpt (key:'K) =
+        let m = getMap key
+        if util.isEmpty m then
+            Opt.None
+        else
+            MapTree.tryFindOpt comparer key m
 
     let resize newBucketSize =
         let capacityLimit = (newBucketSize * util.ShardSize) - 1
@@ -729,6 +787,11 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             lock resizeLock (fun () -> tryFind key)
         else
             tryFind key
+
+    member __.TryGetValue(key:'K,result:byref<'V>) = 
+        tryGetValue(key,&result)
+
+    member __.TryFindOpt(key:'K) = tryFindOpt(key)
 
     member __.Iter(fn:'K -> 'V -> unit) =
         let iopt = OptimizedClosures.FSharpFunc<_,_,_>.Adapt(fn)
@@ -1342,8 +1405,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         let bitdepth = (util.calcBitMaskDepth size)
         let bucketSize = util.pow2 (bitdepth)
         let newBucket = Array.zeroCreate<Shard<'K,'V>>(bucketSize)
-        ShardM
-        ap<_,_>(0,newBucket)
+        ShardMap<_,_>(0,newBucket)
 
     new(count:int,kvps:('K * 'V) list) = let count,bucket = util.init<_,'K,'V>(count, kvps ,fun (k,v) -> KeyValuePair<'K,'V>(k,v)) in ShardMap<'K,'V>(count,bucket)
     new(kvps:('K * 'V) list) = ShardMap<'K,'V>(List.length kvps,kvps)
