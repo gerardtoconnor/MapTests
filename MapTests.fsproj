@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="SampleData.fs"/>
+    <Compile Include="UnionSets.fs" />
     <Compile Include="ShardMap.fs"/>
     <Compile Include="Tests.fs"/>
     <Compile Include="Program.fs"/>

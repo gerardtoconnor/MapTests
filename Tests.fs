@@ -220,4 +220,43 @@ type FoldTests() =
     [<Benchmark>]
     member __.BMap_Fold () =
         Map.fold (fun acc _ _ -> acc + 1 ) 0 bmap
+
+open UnionSets
+type UnionTests() =
+    let su1 = ShardMap<_,_>(bigu1)
+    let su2 = ShardMap<_,_>(bigu2)
+    let su3 = ShardMap<_,_>(bigu3)
+    let su4 = ShardMap<_,_>(bigu4)
+    let su5 = ShardMap<_,_>(bigu5)
+    let su6 = ShardMap<_,_>(bigu6)
+
+    let bu1 = Map<_,_>(bigu1)
+    let bu2 = Map<_,_>(bigu2)
+    let bu3 = Map<_,_>(bigu3)
+    let bu4 = Map<_,_>(bigu4)
+    let bu5 = Map<_,_>(bigu5)
+    let bu6 = Map<_,_>(bigu6)
+
+    let union unionf (ms: Map<string,_> seq) = 
+        seq { for m in ms do yield! m } 
+           |> Seq.groupBy (fun (KeyValue(k,_v)) -> k) 
+           |> Seq.map (fun (k,es) -> (k,unionf (Seq.map (fun (KeyValue(_k,v)) -> v) es))) 
+           |> Map.ofSeq
+
+    [<Benchmark(Baseline=true)>]
+    member __.ShardMap_Union () =  
+        [su1;su2;su3;su4;su5;su6] |> ShardMap.UnionParallel (List.sum)
     
+    [<Fact>]
+    member x.ShardMap_Union_Verify () =  
+        let smap = x.ShardMap_Union()
+        Assert.Equal(2250,smap.Count) 
+            
+    [<Benchmark>]
+    member __.BMap_Union () =
+        [bu1;bu2;bu3;bu4;bu5;bu6] |> union (Seq.sum)
+
+    [<Fact>]
+    member x.BMap_Union_Verify () =  
+        let bmap = x.BMap_Union ()
+        Assert.Equal(2250,Map.count bmap) 

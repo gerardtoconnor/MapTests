@@ -12,6 +12,7 @@ let main argv =
     //BenchmarkRunner.Run<ExistsTest>()
     //BenchmarkRunner.Run<SeqIttrTest>();
     //BenchmarkRunner.Run<AddNewTests>();
-    BenchmarkRunner.Run<MappingTests>();
+    //BenchmarkRunner.Run<MappingTests>();
     //BenchmarkRunner.Run<FoldTests>()
+    BenchmarkRunner.Run<UnionTests>();
     0 // return an integer exit code
