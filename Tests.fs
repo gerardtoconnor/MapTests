@@ -10,6 +10,7 @@ open BenchmarkDotNet.Running
 open BenchmarkDotNet.Reports
 open BenchmarkDotNet.Order
 open Xunit.Abstractions
+open BenchmarkDotNet.Validators
 
 
 type CreateNumberStringMaps () =
@@ -17,6 +18,24 @@ type CreateNumberStringMaps () =
     [<Benchmark(Baseline=true)>]
     member __.Create_ShardMap () =
         ShardMap<_,_>(numberStrings)
+    
+    [<Fact>]
+    member x.Create_ShardMap_verify () =
+        let smap = x.Create_ShardMap ()
+        Assert.Equal(smap.Count,numberStrings.Length)
+
+    [<Benchmark>]
+    member __.Create_ShardMap_Parallel () =
+        let smap = ShardMap<_,_>(numberStrings.Length)
+        System.Threading.Tasks.Parallel.For(0,numberStrings.Length,fun i ->
+            let (k,v) = numberStrings.[i] in smap.AddThis(k,v) |> ignore               
+        ) |> ignore
+        smap
+
+    [<Fact>]
+    member x.Create_ShardMap_Parallel_Verify () =
+        let smap = x.Create_ShardMap_Parallel ()
+        Assert.Equal(numberStrings.Length,smap.Count)
 
     [<Benchmark>]
     member __.Create_BMap () =
@@ -157,12 +176,19 @@ type AddNewTests() =
 
 type MappingTests() = 
     let smap,bmap,dict = getMaps ()
-
-    [<Fact>]
+    let verify = Array.map (fun (k,v)-> k,int v) numberStrings
+    
     [<Benchmark(Baseline=true)>]
     member __.ShardMap_Map () = 
-        smap.Map int |> ignore
-        
+        smap.Map int
+    
+    [<Fact>]
+    member x.ShardMap_Map_Verify () =
+        let mapped = x.ShardMap_Map ()
+        for (k,v) in verify do
+            match mapped.TryFind k with
+            | Some v1 -> Assert.Equal(v1,v)
+            | None    -> Assert.True(false,k + " Key Not Found")
     
     [<Benchmark>]
     member __.Bmap_Map () = 
@@ -177,14 +203,19 @@ type MappingTests() =
 type FoldTests() =
     let smap,bmap,dict = getMaps ()
 
-    [<Fact>]
     [<Benchmark(Baseline=true)>]
     member __.ShardMap_Fold () = 
-        smap.Fold (fun acc _ _ -> acc + 1) 0 |> ignore
+        smap.Fold (fun acc _ _ -> acc + 1) 0
+
+    [<Fact>]
+    member x.ShardMap_Fold_Verify () =
+        let result = x.ShardMap_Fold ()
+        let expected = numberStrings.Length
+        Assert.Equal(result,expected)
     
     [<Benchmark>]
     member __.ShardMap_FoldReduce () =
-        smap.FoldReduce (fun acc _ _ -> acc + 1) (+) 0 |> ignore
+        smap.FoldReduce (fun acc _ _ -> acc + 1) (+) 0
     
     [<Benchmark>]
     member __.BMap_Fold () =

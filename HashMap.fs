@@ -441,11 +441,12 @@ let private ShardSize = 16
 //let calcBitMaskDepth itemCount = int(Math.Ceiling(Math.Log(float itemCount) / Math.Log(float 2))) //todo:make private
 let inline calcBitMaskDepth itemCount =
     let rec go s d =
-        if s = 0 then d
+        if s = 0 then 
+            if d > 5 then d else 5
         else go (s >>> 1) (d + 1)
     go itemCount 0
    
-let inline private pow2 (i:int) = 2 <<< (i - 5) // todo 4 is shard size 2^n
+let inline bucketSizeFromBitDepth (i:int) = 2 <<< (i - 5) // todo 4 is shard size 2^n
 let inline calcSubBitMask (bitDepth:int) = ~~~(-1 <<< (bitDepth))
 
 ///prvides index in bucket of shard
@@ -493,7 +494,7 @@ let private init<'T,'K,'V when 'K : comparison>(counter:int, items : 'T seq,mapF
     let size = if counter < ShardSize then ShardSize else counter
     let comparer = LanguagePrimitives.FastGenericComparer<'K>
     let bitdepth = (calcBitMaskDepth size)
-    let bucketSize = pow2 (bitdepth)
+    let bucketSize = bucketSizeFromBitDepth (bitdepth)
     let bucketBitMask = calcSubBitMask bitdepth
     let newBucket = Array.zeroCreate<Shard<'K,'V>>(bucketSize)
 
@@ -1304,7 +1305,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         let size = if counter < ShardSize then ShardSize else counter
         let comparer = LanguagePrimitives.FastGenericComparer<'K>
         let bitdepth = (calcBitMaskDepth size)
-        let bucketSize = pow2 (bitdepth)
+        let bucketSize = bucketSizeFromBitDepth (bitdepth)
         let bucketBitMask = calcSubBitMask bitdepth
         let newBucket = Array.zeroCreate<Shard<'K,'V>>(bucketSize)
 
@@ -1434,7 +1435,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         let tCount = ref 0
         let countEstimate = ls.Length / 2
         let bitdepth = (calcBitMaskDepth countEstimate)
-        let bucketSize = pow2 (bitdepth)
+        let bucketSize = bucketSizeFromBitDepth (bitdepth)
         let bucketBitMask = calcSubBitMask bitdepth
         let target = newBucketEmpty bucketSize
         for bi in 0 .. bucketSize - 1 do
@@ -1465,7 +1466,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         go ls
         
         let result = ShardMap<'K,'T list>(!tCount,target)
-        let optSize = !tCount |> calcBitMaskDepth  |> pow2
+        let optSize = !tCount |> calcBitMaskDepth  |> bucketSizeFromBitDepth
         printfn "count %A, optSize %A" !tCount optSize
         // if bucketSize < optSize then
         //     result.resize optSize
@@ -1967,7 +1968,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         let size = if counter < ShardSize then ShardSize else counter
         let comparer = LanguagePrimitives.FastGenericComparer<'K>
         let bitdepth = (calcBitMaskDepth size)
-        let bucketSize = pow2 (bitdepth)
+        let bucketSize = bucketSizeFromBitDepth (bitdepth)
         let bucketBitMask = calcSubBitMask bitdepth
         let newBucket = Array.zeroCreate<Shard<'K,'V>>(bucketSize)
 
@@ -2005,7 +2006,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     new(capacity:int) =
         let size = if capacity < ShardSize then ShardSize else capacity
         let bitdepth = (calcBitMaskDepth size)
-        let bucketSize = pow2 (bitdepth)
+        let bucketSize = bucketSizeFromBitDepth (bitdepth)
         let newBucket = Array.zeroCreate<Shard<'K,'V>>(bucketSize)
         ShardMap<_,_>(0,newBucket)
 
@@ -2231,9 +2232,9 @@ smap.Count
 smap |> Seq.length
 smap.PrintLayout()
 
-calcBitMaskDepth 15 // smap.Count
-let inline pow2 (i:int) = 2 <<< (i - 5)
-pow2 5
+calcBitMaskDepth 1023 // smap.Count
+//let inline bucketSizeFromBitDepth (i:int) = 2 <<< (i - 5)
+(bucketSizeFromBitDepth 10) * 16
 
 List.length sml
 
@@ -2589,10 +2590,15 @@ let umapPP = [su1;su2;su3;su4;su5;su6] |> ShardMap.UnionParaParallel (List.sum)
 umap2.Count
 umap2.BucketSize
 umap2.Fold (fun acc _ v -> acc + v ) 0
+
+
+
 let hcon = umap2.GetHashConflicts() 
 hcon.Length
 umap2.PrintLayout()
 umap2.FindDuplications()
+
+bucketSizeFromBitDepth 1011
 
 
 IO.File.WriteAllLines(@"F:\Code\MapTests\unionPairs.csv",umap2 |> Seq.map (fun kvp -> sprintf "%s,%i" kvp.Key kvp.Value ))
