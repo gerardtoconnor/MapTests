@@ -11,23 +11,51 @@ open BenchmarkDotNet.Reports
 open BenchmarkDotNet.Order
 open Xunit.Abstractions
 
-
+[<MemoryDiagnoser>]
+[<DisassemblyDiagnoser(printIL=true,printSource=true)>]
 type CreateNumberStringMaps () =
     
     [<Benchmark(Baseline=true)>]
-    member __.Create_ShardMap () =
-        ShardMap<_,_>(numberStrings)
 
+    member __.Create_ShardMap () = ShardMap<_,_>(numberStrings)
+        
     [<Benchmark>]
-    member __.Create_BMap () =
-        Map<_,_>(numberStrings)
-
+    member __.Create_BMap () = Map<_,_>(numberStrings)
+        
     [<Benchmark>]
     member __.Create_Dict () =
+
         let dict = Dictionary<_,_>(numberStrings.Length)
         for (k,v) in numberStrings do
             dict.Add(k,v)
-        dict         
+        dict
+
+type TotalSize(output:ITestOutputHelper) =
+    let mapGen = CreateNumberStringMaps ()
+    
+    [<Benchmark>]
+    member __.TestSizes () =
+        GC.Collect()
+        let mb = GC.GetTotalMemory false
+        let smap = ShardMap<_,_>(numberStrings)
+        let ma = GC.GetTotalMemory false
+        output.WriteLine(sprintf "ShardMap increased memory by:%A" (ma - mb) )
+
+        GC.Collect()
+        let mb = GC.GetTotalMemory false
+        let bmap = Map<_,_>(numberStrings)
+        let ma = GC.GetTotalMemory false
+        output.WriteLine(sprintf "BMap increased memory by:%A" (ma - mb) )
+        
+        GC.Collect()
+        let mb = GC.GetTotalMemory false
+        let dict = Dictionary<_,_>(numberStrings.Length)
+        for (k,v) in numberStrings do
+            dict.Add(k,v)
+        let ma = GC.GetTotalMemory false
+        output.WriteLine(sprintf "Dict increased memory by:%A" (ma - mb) )
+
+        smap,bmap,dict  
 
 let getMaps () = 
     let mapgen =  CreateNumberStringMaps ()    
