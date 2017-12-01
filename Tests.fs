@@ -49,6 +49,7 @@ type CreateNumberStringMaps () =
             dict.Add(k,v)
         dict
 
+[<MemoryDiagnoser>]
 type TotalSize(output:ITestOutputHelper) =
     let mapGen = CreateNumberStringMaps ()
     
@@ -87,6 +88,7 @@ let getMaps () =
     ,mapgen.Create_BMap ()
     ,mapgen.Create_Dict ()
 
+[<MemoryDiagnoser>]
 type LookupTests() =
 
     let smap,bmap,dict = getMaps ()
@@ -130,7 +132,8 @@ type LookupTests() =
             match dict.TryGetValue k with
             | true, r -> Assert.Equal(r,v)
             | false,_ -> Assert.True(false)
-        
+
+[<MemoryDiagnoser>]        
 type ExistsTest() =
     
     let smap,bmap,dict = getMaps ()
@@ -150,8 +153,7 @@ type ExistsTest() =
     member __.BMap_Exists () =
         Assert.True( Map.exists  (fun _ v -> v = "3002087") bmap )
 
-
-
+[<MemoryDiagnoser>]
 type SeqIttrTest() = 
     let smap,bmap,dict = getMaps ()
 
@@ -183,6 +185,7 @@ type SeqIttrTest() =
             ()
         Assert.Equal(numberStrings.Length ,counter)
 
+[<MemoryDiagnoser>]
 type AddNewTests() =
     let smap,bmap,dict = getMaps ()
     
@@ -206,7 +209,7 @@ type AddNewTests() =
         ndict.Add(k,v)
         Assert.True( ndict.ContainsKey(k) && not(dict.ContainsKey(k)) )
 
-
+[<MemoryDiagnoser>]
 type MappingTests() = 
     let smap,bmap,dict = getMaps ()
     let verify = Array.map (fun (k,v)-> k,int v) numberStrings
@@ -232,7 +235,8 @@ type MappingTests() =
         let ndict = Dictionary<string,int>(dict.Count)
         for item in dict do
             ndict.Add(item.Key,int item.Value)
-        
+
+[<MemoryDiagnoser>]        
 type FoldTests() =
     let smap,bmap,dict = getMaps ()
 
@@ -255,6 +259,7 @@ type FoldTests() =
         Map.fold (fun acc _ _ -> acc + 1 ) 0 bmap
 
 open UnionSets
+[<MemoryDiagnoser>]
 type UnionTests() =
     let su1 = ShardMap<_,_>(bigu1)
     let su2 = ShardMap<_,_>(bigu2)
@@ -294,6 +299,7 @@ type UnionTests() =
         let bmap = x.BMap_Union ()
         Assert.Equal(2250,Map.count bmap) 
 
+[<MemoryDiagnoser>]
 type LayerdListTests() =
     
     let smap,bmap,_ = getMaps ()
@@ -332,6 +338,7 @@ type LayerdListTests() =
             for item in bl do
                 Assert.True( List.contains item kvp.Value )
 
+[<MemoryDiagnoser>]
 type CollectTests() =
 
     let splitter (_,v:string) = [v.[0 .. v.Length/2 ] ; v.[v.Length/2 .. v.Length - 1]]  
@@ -354,9 +361,8 @@ type CollectTests() =
         for kvp in bmap do
             Assert.Equal( smap.[kvp.Key],kvp.Value )
 
+[<MemoryDiagnoser>]
 type AddAndGrowTest() = 
-    // let ary1 = numberStrings.[0 .. numberStrings.Length / 2]
-    // let ary2 = numberStrings.[numberStrings.Length / 2 .. numberStrings.Length - 1 ]
 
     [<Benchmark(Baseline=true)>]
     member __.ShardMap_AddAndGrow() =
@@ -379,6 +385,7 @@ type AddAndGrowTest() =
         Assert.Equal(0,smap.Count)
         Assert.True( fmap.BucketSize > iBuck)
 
+[<MemoryDiagnoser>]
 type MapTest() =
     let smap,bmap,dict = getMaps ()
 
