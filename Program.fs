@@ -15,7 +15,9 @@ let main argv =
     //BenchmarkRunner.Run<MappingTests>();
     //BenchmarkRunner.Run<FoldTests>()    
     //BenchmarkRunner.Run<TotalSize>()
-    BenchmarkRunner.Run<LayerdListTests>()
+    //BenchmarkRunner.Run<LayerdListTests>()
+    BenchmarkRunner.Run<MapTest>()
+
 
     0 // return an integer exit code
 
