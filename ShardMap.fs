@@ -660,7 +660,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
                     next(bi,si)
         hop(0,0)
 
-    let existsPar (existsFn:'K -> 'V  -> bool) = 
+    let existsPar (existsFn:'K -> 'V  -> bool) = // ERROR OUT OF BOUNDS EXCEPTION ISSUE
         let fnOpt = OptimizedClosures.FSharpFunc<_,_,_>.Adapt(existsFn)
         let mutable found = false
         let rec go(shrd:Shard<'K,'V>,si:int,pls:ParallelLoopState) =

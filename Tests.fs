@@ -299,5 +299,32 @@ type AddAndGrowTest() =
                 map
         let fmap = go(smap, 0)
         Assert.Equal(fmap.Count,numberStrings.Length)
+        for (k,v) in numberStrings do
+            let result = fmap.TryFindOpt k
+            Assert.True(result.Exists)
+            Assert.Equal(result.Val,v)
+            
+        
         Assert.Equal(0,smap.Count)
         Assert.True( fmap.BucketSize > iBuck)
+
+type MapTest() =
+    let smap,bmap,dict = getMaps ()
+
+    [<Benchmark(Baseline=true)>]
+    member __.ShardMap_Map () =
+        smap.Map int
+
+    [<Benchmark>]
+    member __.BMap_Map () =
+        Map.map (fun _ v -> int v ) bmap
+
+    [<Fact>]
+    member x.Shardmap_MapTest_Verify () =
+        let snmap = x.ShardMap_Map ()
+        let bnmap = x.BMap_Map ()
+        Assert.Equal(snmap.Count,bnmap.Count)
+        for kvp in bnmap do
+            let result = snmap.TryFindOpt kvp.Key
+            Assert.True(result.Exists)
+            Assert.Equal(result.Val,kvp.Value)
