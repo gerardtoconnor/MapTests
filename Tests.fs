@@ -279,6 +279,25 @@ type CollectTests() =
     member x.LayerList_Verify () =
         let smap = x.ShardMap_Collect ()
         let bmap = x.BMap_Collect ()
-        //Assert.Equal(bmap.Count,smap.Count)
+        Assert.Equal(bmap.Count,smap.Count)
         for kvp in bmap do
             Assert.Equal( smap.[kvp.Key],kvp.Value )
+
+type AddAndGrowTest() = 
+    // let ary1 = numberStrings.[0 .. numberStrings.Length / 2]
+    // let ary2 = numberStrings.[numberStrings.Length / 2 .. numberStrings.Length - 1 ]
+
+    [<Benchmark(Baseline=true)>]
+    member __.ShardMap_AddAndGrow() =
+        let smap = ShardMap.Empty
+        let iBuck = smap.BucketSize
+        
+        let rec go(map:ShardMap<_,_>, i) =
+            if i < numberStrings.Length then
+                go(map.Add numberStrings.[i],i+1)
+            else
+                map
+        let fmap = go(smap, 0)
+        Assert.Equal(fmap.Count,numberStrings.Length)
+        Assert.Equal(0,smap.Count)
+        Assert.True( fmap.BucketSize > iBuck)
