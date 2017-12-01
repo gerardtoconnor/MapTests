@@ -12,7 +12,8 @@ open BenchmarkDotNet.Order
 open Xunit.Abstractions
 open BenchmarkDotNet.Validators
 
-
+[<MemoryDiagnoser>]
+[<DisassemblyDiagnoser(printIL=true,printSource=true)>]
 type CreateNumberStringMaps () =
     
     [<Benchmark(Baseline=true)>]
@@ -36,17 +37,49 @@ type CreateNumberStringMaps () =
     member x.Create_ShardMap_Parallel_Verify () =
         let smap = x.Create_ShardMap_Parallel ()
         Assert.Equal(numberStrings.Length,smap.Count)
-
+        
     [<Benchmark>]
-    member __.Create_BMap () =
-        Map<_,_>(numberStrings)
-
+    member __.Create_BMap () = Map<_,_>(numberStrings)
+        
     [<Benchmark>]
     member __.Create_Dict () =
+
         let dict = Dictionary<_,_>(numberStrings.Length)
         for (k,v) in numberStrings do
             dict.Add(k,v)
-        dict         
+        dict
+
+type TotalSize(output:ITestOutputHelper) =
+    let mapGen = CreateNumberStringMaps ()
+    
+    //[<Fact>]
+    member __.TestSizes () =
+       
+        let results = Array.zeroCreate<int64>(3)
+        let names = [|"Dict";"Bmap";"Shard"|]
+
+        for r in 1 .. 10 do
+            GC.Collect()
+            let mb = GC.GetTotalMemory false
+            let dict = Dictionary<_,_>(numberStrings.Length)
+            for (k,v) in numberStrings do
+                dict.Add(k,v)
+            let ma = GC.GetTotalMemory false
+            output.WriteLine(sprintf "%10i :[%2i]Dict increased memory" (ma - mb) r)
+
+            GC.Collect()
+            let mb = GC.GetTotalMemory false
+            let bmap = Map<_,_>(numberStrings)
+            let ma = GC.GetTotalMemory false
+            output.WriteLine(sprintf "%10i :[%2i]BMap increased memory" (ma - mb) r)
+        
+            GC.Collect()
+            let mb = GC.GetTotalMemory false
+            let smap = ShardMap<_,_>(numberStrings)
+            let ma = GC.GetTotalMemory false
+            output.WriteLine(sprintf "%10i :[%2i]ShardMap increased memory" (ma - mb) r)
+        
+        //Assert.True(false)  
 
 let getMaps () = 
     let mapgen =  CreateNumberStringMaps ()    
@@ -260,3 +293,109 @@ type UnionTests() =
     member x.BMap_Union_Verify () =  
         let bmap = x.BMap_Union ()
         Assert.Equal(2250,Map.count bmap) 
+
+type LayerdListTests() =
+    
+    let smap,bmap,_ = getMaps ()
+    let ls = 
+        let mutable temp = []
+        for i in 0 .. 100 do temp <- numberStrings.[i] :: temp
+        for i in 50 .. 150 do temp <- numberStrings.[i] :: temp
+        for i in 100 .. 200 do temp <- numberStrings.[i] :: temp
+        temp
+    
+    let keyFn = (fun (k,v) -> k)
+
+    [<Benchmark(Baseline=true)>]
+    member __.ShardMap_LayerList () = 
+
+        ShardMap.LayerList keyFn ls
+
+    [<Benchmark>]
+    member __.BMap_LayerList () =
+        let addMethodImplToTable y tab =
+            let key = keyFn y
+            let prev = 
+                match Map.tryFind key tab with
+                | Some ml -> ml
+                | None    -> [] 
+            Map.add key (y::prev) tab
+        List.foldBack addMethodImplToTable ls Map.empty
+
+    [<Fact>]
+    member x.LayerList_Verify () =
+        let smap = x.ShardMap_LayerList ()
+        let bmap = x.BMap_LayerList ()
+        Assert.Equal(bmap.Count,smap.Count)
+        for kvp in bmap do
+            let bl = smap.[kvp.Key]
+            for item in bl do
+                Assert.True( List.contains item kvp.Value )
+
+type CollectTests() =
+
+    let splitter (_,v:string) = [v.[0 .. v.Length/2 ] ; v.[v.Length/2 .. v.Length - 1]]  
+
+    [<Benchmark(Baseline=true)>]
+    member __.ShardMap_Collect() =
+        ShardMap.Collect splitter (fun v -> v.[0 .. v.Length/2 ]) numberStrings
+    
+    [<Benchmark>]
+    member __.BMap_Collect() =
+        numberStrings
+        |> Seq.collect splitter 
+        |> Seq.fold (fun acc v -> Map.add (v.[0 .. v.Length/2 ]) v acc) Map.empty
+
+    [<Fact>]
+    member x.LayerList_Verify () =
+        let smap = x.ShardMap_Collect ()
+        let bmap = x.BMap_Collect ()
+        Assert.Equal(bmap.Count,smap.Count)
+        for kvp in bmap do
+            Assert.Equal( smap.[kvp.Key],kvp.Value )
+
+type AddAndGrowTest() = 
+    // let ary1 = numberStrings.[0 .. numberStrings.Length / 2]
+    // let ary2 = numberStrings.[numberStrings.Length / 2 .. numberStrings.Length - 1 ]
+
+    [<Benchmark(Baseline=true)>]
+    member __.ShardMap_AddAndGrow() =
+        let smap = ShardMap.Empty
+        let iBuck = smap.BucketSize
+        
+        let rec go(map:ShardMap<_,_>, i) =
+            if i < numberStrings.Length then
+                go(map.Add numberStrings.[i],i+1)
+            else
+                map
+        let fmap = go(smap, 0)
+        Assert.Equal(fmap.Count,numberStrings.Length)
+        for (k,v) in numberStrings do
+            let result = fmap.TryFindOpt k
+            Assert.True(result.Exists)
+            Assert.Equal(result.Val,v)
+            
+        
+        Assert.Equal(0,smap.Count)
+        Assert.True( fmap.BucketSize > iBuck)
+
+type MapTest() =
+    let smap,bmap,dict = getMaps ()
+
+    [<Benchmark(Baseline=true)>]
+    member __.ShardMap_Map () =
+        smap.Map int
+
+    [<Benchmark>]
+    member __.BMap_Map () =
+        Map.map (fun _ v -> int v ) bmap
+
+    [<Fact>]
+    member x.Shardmap_MapTest_Verify () =
+        let snmap = x.ShardMap_Map ()
+        let bnmap = x.BMap_Map ()
+        Assert.Equal(snmap.Count,bnmap.Count)
+        for kvp in bnmap do
+            let result = snmap.TryFindOpt kvp.Key
+            Assert.True(result.Exists)
+            Assert.Equal(result.Val,kvp.Value)

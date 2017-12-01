@@ -2,3 +2,4 @@ obj/
 bin/
 unionPairs.csv
 BenchmarkDotNet.Artifacts
+.vscode/
