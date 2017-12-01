@@ -2617,7 +2617,7 @@ type ArrayCursor<'T> =
     static member jump (ac:ArrayCursor<'T>) (pos:int) = ArrayCursor<'T>(ac.iary,if pos < ac.iary.Length && pos > 0 then pos else -1 )
     static member item (ac:ArrayCursor<'T>) = ac.iary.[ac.position]
     static member jumpItem (ac:ArrayCursor<'T>) (pos:int) = if pos < ac.iary.Length && pos > 0 then ac.iary.[pos] else failwithf "Out of index exception"
-    new (ary: 'T [],pos) = { iary = ary ; position = pos } // include pos bounds check on constructor 
+    new (ary: 'T [],pos) = { iary = ary ; position = if pos >= ary.length || pos < 0 then failwithf "ERROR: tried ot create cursor at position %i on arrary length %i" pos iary.length else pos } // include pos bounds check on constructor 
     new (ary: 'T []) = { iary = ary ; position = 0 }
 
 let inline (!+) (ac:ArrayCursor<'T>) = ArrayCursor<'T>.itemNext ac
@@ -2643,3 +2643,6 @@ let jumpCur = acur @ 4
 let jumpVal = acur ! 5
 
 let v = @myAryCur
+
+
+for 

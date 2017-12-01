@@ -499,6 +499,7 @@ module private util =
 
 open util
 open MapTree
+open System.Threading.Tasks
 
     /// Shard Map
     ////////////////////////////
@@ -666,21 +667,37 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     let existsPar (existsFn:'K -> 'V  -> bool) = 
         let fnOpt = OptimizedClosures.FSharpFunc<_,_,_>.Adapt(existsFn)
         let mutable found = false
-        let rec go(shrd:Shard<'K,'V>,si:int) =
+        let rec go(shrd:Shard<'K,'V>,si:int,pls:ParallelLoopState) =
             if not found then
                 if util.isEmpty shrd.[si] then
                     if si + 1 < util.ShardSize then
-                        go(shrd,si + 1)
+                        go(shrd,si + 1,pls)
                 else
                     if MapTree.existsOpt fnOpt shrd.[si] then
                         found <- true
+                        pls.Break()
                     else
                         if si + 1 < util.ShardSize then
-                            go(shrd,si + 1)
+                            go(shrd,si + 1,pls)
+        let rec buck(pos,final,pls:ParallelLoopState) =
+            if pos < final then
+                go(bucket.[pos],0,pls)
+                if not found then
+                    buck(pos+1,final,pls)
 
-        Tasks.Parallel.For(0,bucket.Length,fun bi ->
-            go(bucket.[bi],0)
+        // Tasks.Parallel.For()
+        // Tasks.Parallel.ForEach(bucket,Action<Shard<_,_>,ParallelLoopState>(fun shrd pls ->
+        //     go(shrd,0,pls)
+        // )) |> ignore
+
+        let batchsize = if bucket.Length = 2 then 2 else bucket.Length >>> 1 //default 4 batches
+        Tasks.Parallel.For(0,2,fun wi (pls:ParallelLoopState) ->
+            buck(wi * batchsize,(wi + 1) * batchsize,pls)
         ) |> ignore
+
+        // Tasks.Parallel.For(0,bucket.Length,fun bi ->
+        //     go(bucket.[bi],0)
+        // ) |> ignore
         
         found
     let tryFindInRange (fn:'V -> bool) =
@@ -711,6 +728,8 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         for bi in 0.. bucket.Length - 1 do
         if util.isEmpty bucket.[bi] then
             bucket.[bi] <- empty
+
+    let cache1  v = 10 * v
 
     static member private transpose (fn:MapTree<'K,'V> -> MapTree<'K,'T>) (itemCount:int) (bucket:Shard<'K,'V> []) =
         let nBucket = Array.zeroCreate<Shard<'K,'T>>(bucket.Length)
@@ -1031,15 +1050,23 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         // Step through maps to union
         ShardMap<'K,'V>(!tCount,target)
 
-    static member Collect (collectFn: 'T -> 'V list) (keyFn:'V -> 'K) (collection:seq<'T>) =
-        let mutable counter = 0
-        let mutable items = []
+
+    /////////////////////////////////
+    /// Static Methods
+    /////////////////////////////////
+
+    static member inline Empty with get () = ShardMap<'K,'V>(0)
+
+    static member Collect (collectFn: 'T -> ('V list) ) (keyFn:'V -> 'K) (collection:list<'T>) =
+        
+        let initSize = List.length collection
+
         for a in collection do
             for b in collectFn a do
                 counter <-  counter + 1
                 items <- b :: items
 
-        let size = if counter < util.ShardSize then util.ShardSize else counter
+        let size = if initSize < util.ShardSize then util.ShardSize else initSize
         let comparer = LanguagePrimitives.FastGenericComparer<'K>
         let bitdepth = util.calcBitMaskDepth size
         let bucketSize = util.pow2 (bitdepth)
