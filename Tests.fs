@@ -29,15 +29,41 @@ type CreateNumberStringMaps () =
     member __.Create_ShardMap_Parallel () =
         let smap = ShardMap<_,_>(numberStrings.Length)
         System.Threading.Tasks.Parallel.For(0,numberStrings.Length,fun i ->
-            let (k,v) = numberStrings.[i] in smap.AddThis(k,v) |> ignore               
+            numberStrings.[i] |> smap.AddThis  |> ignore            
         ) |> ignore
         smap
+        
 
     [<Fact>]
     member x.Create_ShardMap_Parallel_Verify () =
         let smap = x.Create_ShardMap_Parallel ()
         Assert.Equal(numberStrings.Length,smap.Count)
-        
+        for (k,v) in numberStrings do
+            Assert.Equal(smap.[k],v)          
+    
+    [<Benchmark>]
+    member __.Create_ShardMap_FromEmpty () =
+        let smap = ShardMap<_,_>.Empty
+        for i in 0 .. numberStrings.Length - 1 do
+            numberStrings.[i] |> smap.AddThis |> ignore
+        smap
+    
+    [<Fact>]
+    member x.Create_ShardMap_FromEmpty_Verify () =
+        let smap = x.Create_ShardMap_FromEmpty ()
+        Assert.Equal(numberStrings.Length,smap.Count)
+        for (k,v) in numberStrings do
+            Assert.Equal(smap.[k],v)
+
+    [<Fact>]
+    member x.Create_ShardMap_CompoundKey () =
+        let altCol = numberStrings |> Array.map (fun (k,v) -> (k,int k),v )
+        let cmap = ShardMap<_,_>(altCol)
+        Assert.Equal(altCol.Length,cmap.Count)
+        for (k,v) in altCol do
+            Assert.Equal(v,cmap.[k])
+
+    //////////////////
     [<Benchmark>]
     member __.Create_BMap () = Map<_,_>(numberStrings)
         
@@ -285,19 +311,23 @@ type UnionTests() =
     member __.ShardMap_Union () =  
         [su1;su2;su3;su4;su5;su6] |> ShardMap.UnionParallel (List.sum)
     
-    [<Fact>]
-    member x.ShardMap_Union_Verify () =  
-        let smap = x.ShardMap_Union()
-        Assert.Equal(2250,smap.Count) 
-            
     [<Benchmark>]
     member __.BMap_Union () =
         [bu1;bu2;bu3;bu4;bu5;bu6] |> union (Seq.sum)
 
     [<Fact>]
-    member x.BMap_Union_Verify () =  
+    member x.Union_Verify () =  
+
+        let smap = x.ShardMap_Union()
+        Assert.Equal(2250,smap.Count) 
+
         let bmap = x.BMap_Union ()
         Assert.Equal(2250,Map.count bmap) 
+        for kvp in bmap do
+            let r = smap.TryFindOpt kvp.Key
+            Assert.True(r.Exists)
+            Assert.Equal(kvp.Value,r.Val)
+
 
 [<MemoryDiagnoser>]
 type LayerdListTests() =
