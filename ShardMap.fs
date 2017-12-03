@@ -641,8 +641,6 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 
         let m = shrd.[si]
         if isNull m |> not then
-        //    raise <| KeyNotFoundException(sprintf "Key:'%A' not found in map so cannot remove" k)
-        //else
             shrd.[si] <- MapTree.removeDecr comparer k countRef m
  
 
@@ -799,12 +797,14 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         //     add(k,v)
         //this
 
-    member this.RemoveThis(k:'K) =
-        if resizing then
-            lock resizeLock (fun () -> remove(k))
-        else
-            remove(k)
-        this
+    member __.RemoveThis(k:'K) =
+        lock resizeLock (fun () -> remove(k))
+        
+        // if resizing then
+        //     lock resizeLock (fun () -> remove(k))
+        // else
+        //     remove(k)
+        // this
 
     member __.Copy() =        
         let newbucket = Array.zeroCreate<Shard<'K,'V>>(bucket.Length)
@@ -834,6 +834,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
     member x.Remove(k:'K) =
         let newShardMap = x.Copy()
         newShardMap.RemoveThis(k)
+        newShardMap
 
     member x.RemoveList(items:'K list) =
         let newShardMap = x.Copy()

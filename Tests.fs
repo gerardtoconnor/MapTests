@@ -415,6 +415,35 @@ type AddAndGrowTest() =
         Assert.Equal(0,smap.Count)
         Assert.True( fmap.BucketSize > iBuck)
 
+
+[<MemoryDiagnoser>]
+type RemoveTest() = 
+
+    let smap = ShardMap<_,_>(numberStrings)
+    let ary1 = numberStrings.[0 .. numberStrings.Length / 2]
+    let ary2 = numberStrings.[ numberStrings.Length / 2 .. numberStrings.Length - 1]
+
+    [<Benchmark(Baseline=true)>]
+    member __.ShardMap_Remove() =
+        
+        let rec go(map:ShardMap<_,_>, i) =
+            if i < ary1.Length  - 1 then
+                let (k,_) = ary1.[i]
+                go(map.Remove k,i+1)
+            else
+                map
+        let fmap = go(smap, 0)
+        Assert.Equal(fmap.Count,ary2.Length)
+        
+        for (k,_) in ary1 do
+            let result = fmap.TryFindOpt k
+            Assert.True(not result.Exists)
+
+        for (k,v) in ary2 do
+            let result = fmap.TryFindOpt k
+            Assert.True(result.Exists)
+            Assert.Equal(v,result.Val)
+        
 [<MemoryDiagnoser>]
 type MapTest() =
     let smap,bmap,dict = getMaps ()
