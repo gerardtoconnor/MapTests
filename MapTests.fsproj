@@ -10,7 +10,8 @@
     <Compile Include="UnionSets.fs" />
     <Compile Include="ShardMap.fs"/>
     <Compile Include="Tests.fs"/>
-    <Compile Include="RolledMap.fs" />
+    <!-- <Compile Include="CircularQueue.fs"/> -->
+    <!-- <Compile Include="RolledMap.fs" /> -->
     <Compile Include="Program.fs"/>
   </ItemGroup>
   <ItemGroup>
