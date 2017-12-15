@@ -1116,7 +1116,7 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
         let bucketSize = bucketSizeFromBitDepth (bitdepth)
         let bucketBitMask = calcSubBitMask bitdepth
         let newBucket = Array.zeroCreate<Shard<'K,'V>>(bucketSize)
-        let countRef = ref 0
+        let mutable countRef = 0
 
         for a in collection do
             for item in collectFn a do
@@ -1379,5 +1379,5 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
             counter <- counter + 1
             items <- kvp :: items
         )
-        ShardMap<'K,'V>(counter,kvps)
+        ShardMap<'K,'V>(counter,items)
     new() = ShardMap<_,_>(0)
