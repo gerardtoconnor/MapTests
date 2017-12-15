@@ -1107,9 +1107,9 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, nBucke
 
     static member inline Empty with get () = ShardMap<'K,'V>(0)
 
-    static member Collect (collectFn: 'T -> #seq<'V>) (keyFn:'V -> 'K) (collection:seq<'T>) =
+    static member Collect (collectFn: 'T -> #seq<'V>) (keyFn:'V -> 'K) (collection:list<'T>) =
         
-        let initSize = Seq.length collection //:HACK
+        let initSize = List.length collection
         let size = if initSize < ShardSize then ShardSize else initSize
         let comparer = LanguagePrimitives.FastGenericComparer<'K>
         let bitdepth = calcBitMaskDepth size
