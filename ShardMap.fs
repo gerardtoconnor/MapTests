@@ -514,6 +514,7 @@ module private util =
 
 open util
 open System.Threading.Tasks
+open System.ComponentModel.DataAnnotations
 
     /// Shard Map
     ////////////////////////////
@@ -1103,12 +1104,10 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, newBuc
 
     static member inline Empty with get () = ShardMap<'K,'V>(0)
 
-    static member Collect (collectFn: 'T -> #seq<'V>) (keyFn:'V -> 'K) (collection:list<'T>) =
+    static member Collect (collectFn: 'T -> #seq<'V>) (keyFn:'V -> 'K) (collection:seq<'T>) =
         
-        let initSize = List.length collection // cheaper to quickly itterate list to discover hashsize rather then re-hash multiple times on re-size
-        let size = if initSize < ShardSize then ShardSize else initSize
         let comparer = LanguagePrimitives.FastGenericComparer<'K>
-        let bitdepth = calcBitMaskDepth size
+        let bitdepth = calcBitMaskDepth 16 // unknown size so create heavy trees in small hash space that can be optimised afterwards
         let bucketSize = bucketSizeFromBitDepth (bitdepth)
         let bucketBitMask = calcSubBitMask bitdepth
         let newBucket = Array.zeroCreate<Shard<'K,'V>>(bucketSize)
