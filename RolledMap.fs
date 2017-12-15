@@ -1,12 +1,19 @@
 module RolledMap
 
-type NodeType =
-| MatchesValueEdges
-| MatchesEdges
-| MatchesValue
-| Edges
-| Value
-| Removed
+// type NodeType =
+// | MatchesValueEdges
+// | MatchesEdges
+// | MatchesValue
+// | Edges
+// | Value
+// | Removed
+
+let nMatch   = 0b1000uy
+let nValue   = 0b0100uy
+let nEdges   = 0b0010uy
+let nRemoved = 0b0001uy
+
+let inline ( &? )  nodeType pattern = (nodeType &&& pattern) <> 0uy  
 
 let inline bucketIndex (index:int) = index >>> 8
 let inline shardIndex (index:int) = index &&& 0b11111111
@@ -35,6 +42,25 @@ type RolledMap<'T>(items : (string * 'T) seq) =
         values.[bucketIndex mp].[int vi]
 
     let readEdges( ) =
+
+    let rec readNode (mp:int,kp:int,key:string) =
+        let ntype = bucket.[bucketIndex index].[shardIndex index]
+         
+        let mp = 
+            if ntype &? nMatch then 
+                readMatches(mp + 1,kp,key)
+            else
+                mp
+
+        if mp = - 1 then 
+            - 1
+        else
+
+            let mp = 
+                if ntype &? nValue then
+                    readValue()
+
+
 
 
 
