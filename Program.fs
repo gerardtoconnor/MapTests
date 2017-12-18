@@ -14,7 +14,8 @@ let main argv =
     //BenchmarkRunner.Run<AddNewTests>();
     //BenchmarkRunner.Run<MappingTests>();
     //BenchmarkRunner.Run<FoldTests>()
-    BenchmarkRunner.Run<UnionTests>();
+    BenchmarkRunner.Run<CollectTests>()
+    // BenchmarkRunner.Run<UnionTests>()
     //BenchmarkRunner.Run<FoldTests>()    
     //BenchmarkRunner.Run<TotalSize>()
     //BenchmarkRunner.Run<LayerdListTests>()
