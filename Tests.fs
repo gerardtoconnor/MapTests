@@ -465,3 +465,25 @@ type MapTest() =
             let result = snmap.TryFindOpt kvp.Key
             Assert.True(result.Exists)
             Assert.Equal(result.Val,kvp.Value)
+
+
+type DummyClass() = member val Value = 0 with get , set
+[<MemoryDiagnoser>]
+type MapCastTest() =
+    let cls = DummyClass()
+    let di = 
+        dict [
+            typeof<DummyClass>,cls :> obj
+            typeof<MapTest>,MapTest :> obj
+            typeof<RemoveTest>,RemoveTest :> obj
+        ]
+
+    [<Benchmark(Baseline=true)>]
+    member __.Direct () =
+            cls.Value <- cls.Value + 1
+
+    [<Benchmark>]
+    member __.DepInjection () =
+            let temp = di.[typeof<DummyClass>] :?> DummyClass
+            temp.Value <- temp.Value + 1 
+            

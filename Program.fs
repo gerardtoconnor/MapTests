@@ -7,6 +7,7 @@ open ShardMap.Tests
 [<EntryPoint>]
 let main argv =
     printfn "Starting Banchmark tests"
+
     // BenchmarkRunner.Run<CreateNumberStringMaps>()
     //BenchmarkRunner.Run<LookupTests>();
     //BenchmarkRunner.Run<ExistsTest>()
@@ -14,12 +15,13 @@ let main argv =
     //BenchmarkRunner.Run<AddNewTests>();
     //BenchmarkRunner.Run<MappingTests>();
     //BenchmarkRunner.Run<FoldTests>()
-    BenchmarkRunner.Run<CollectTests>()
+    //BenchmarkRunner.Run<CollectTests>()
     // BenchmarkRunner.Run<UnionTests>()
     //BenchmarkRunner.Run<FoldTests>()    
     //BenchmarkRunner.Run<TotalSize>()
     //BenchmarkRunner.Run<LayerdListTests>()
     //BenchmarkRunner.Run<MapTest>()
+    BenchmarkRunner.Run<MapCastTest>()
 
     0 // return an integer exit code
 

@@ -42,16 +42,18 @@ type NodeType =
 let inline bucketIndex (index:int) = index >>> 8
 let inline shardIndex (index:int) = index &&& 0b11111111
 
+let inline int2 (pos:node:byte []) = struct (pos + 2, ((int node.[pos]) <<< 8) &&& (int node.[pos + 1]) )
+
 type RolledMap<'T>(items : (string * 'T) seq) =
     let bucket = Array.zeroCreate<byte []>(2)
-    let values = Array.zeroCreate<'T []>(2)
+    let values = Array.zeroCreate<'T>(2)
 
-    let readMatches(mp,kp,key:string) =
-        let mcount = int bucket.[bucketIndex mp].[shardIndex mp]
+    let readMatches(mp,kp,key:string,node:byte []) =
+        let mcount = int node.[0]
         let rec go mov =
             let nmp = mp + mov
             let nkp = kp + mov
-            if bucket.[bucketIndex nmp].[shardIndex nmp] = byte key.[nkp] then
+            if node.[mp] = byte key.[nkp] then
                 if mov < mcount then
                     go (mov + 1)
                 else
@@ -60,12 +62,32 @@ type RolledMap<'T>(items : (string * 'T) seq) =
                 -1
         go 1 // skip count header
 
-    let readValue(mp) = 
-        let bi = bucketIndex mp
-        let vi = bucket.[bi].[shardIndex mp]  
-        values.[bucketIndex mp].[int vi]
+    let readValue(mp,node:byte []) = 
+        let vi = ((int node.[mp]) <<< 8) &&& (int node.[mp + 1]) 
+        Some values.[vi]
 
-    let readEdges( ) = ()
+    let readEdges(mp,kp,key:string,node:byte []) =
+        let ecount = int node.[mp]
+        let mp = mp + 1 //mode to first node
+
+        let c = key.[kp]
+        Char 
+
+        let rec go(l,r) = 
+            if l > r then 
+                None 
+            else
+                let m = (l + r) / 2
+                if edges.[m].Char = v then edges.[m].Node |> Some
+                else if edges.[m].Char < v then go (m + 1, r)
+                else if edges.[m].Char > v then go (l ,m - 1)
+                else None
+                match edges.Count with 
+                | 0 -> None
+                | 1 -> if edges.[0].Char = v then edges.[0].Node |> Some else None 
+                | n -> go(0 , n - 1)
+
+        
 
 
 
@@ -94,19 +116,18 @@ for _ in 0 .. 100000000 do
     let rec readNode (mp:int,kp:int,key:string) =
         let ntype = bucket.[bucketIndex index].[shardIndex index]
          
-        let mp = 
-            if ntype &? nMatch then 
-                readMatches(mp + 1,kp,key)
-            else
-                mp
+        let mutable mp = mp 
+            
+        if ntype &? nMatch then 
+            mp <- readMatches(mp + 1,kp,key)
 
-        if mp = - 1 then 
-            - 1
-        else
+        if mp <> - 1 then
+            
+            if ntype &? nValue then
+                readValue()
+            
+            if ntype &? nEdges then
 
-            let mp = 
-                if ntype &? nValue then
-                    readValue()
 
 
 
@@ -156,4 +177,3 @@ for kvp in chars do
     printfn "- %A [%A]: %i" kvp.Key (byte kvp.Key) kvp.Value
 printfn "> MAX Char: %i" maxchar
 printfn "%i" chars.Count
-
