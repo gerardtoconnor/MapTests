@@ -1307,8 +1307,11 @@ type ShardMap<'K,'V  when 'K : equality and 'K : comparison >(icount:int, newBuc
         
         // start of enumeration (first shard used to create target interim map)
         let maxBucket, buckets = maps |> List.fold (fun (mb,bl) m -> (if m.BucketSize > mb then m.BucketSize else mb) , m.getBucket() :: bl ) (0,[])
-        let target = Array.zeroCreate<Shard<'K,MutateHead<'V>>>(maxBucket)
-        threadBuckets(buckets ,target)
+        if maxBucket = 0 then
+            ShardMap<_,_>.Empty
+        else        
+            let target = Array.zeroCreate<Shard<'K,MutateHead<'V>>>(maxBucket)
+            threadBuckets(buckets ,target)
             
     static member private init<'T>(counter:int, items : 'T seq,mapFn: 'T -> KeyValuePair<'K,'V>) =
         let size = if counter < ShardSize then ShardSize else counter

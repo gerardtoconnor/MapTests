@@ -1,4 +1,7 @@
 
+(*
+Fail results from FCS tests (x10)
+*)
 
 let matching (expected:seq<'T>) (actual:seq<'T>) =
     let mutable matched = 0  
@@ -100,32 +103,7 @@ let actual = [("N", "file2", (2, 7), (2, 8), ["module"]);
  ("CAbbrev", "file1", (10, 5), (10, 12), ["abbrev"]);
  ("property P", "file1", (5, 13), (5, 14), ["member"; "prop"])]
 
- actual.Length = expected.Length
-
 matching actual expected
-
-let mutable matched = 0  
-for (emem,efile,est,efin,eprops) in expected do
-    let mutable found = false
-    for (amem,afile,ast,afin,aprops) in actual do
-        if emem = amem && efile = afile && est = ast && efin = afin && eprops = aprops then
-            found <- true
-            matched <- matched + 1
-    if not found then
-        printfn "NOT_FOUND: %A" (emem,efile,est,efin,eprops)
-printfn "Matched: %i of %i items" matched actual.Length    
-
-
-let mutable matched = 0  
-for (emem,efile,est,efin,eprops) in actual do
-    let mutable found = false
-    for (amem,afile,ast,afin,aprops) in expected do
-        if emem = amem && efile = afile && est = ast && efin = afin && eprops = aprops then
-            found <- true
-            matched <- matched + 1
-    if not found then
-        printfn "NOT_FOUND: %A" (emem,efile,est,efin,eprops)
-printfn "Matched: %i of %i items" matched actual.Length
 
 // 2) pass
 let expexted2 = ["N"; "val y2"; "val pair2"; "val pair1"; "val enumValue"; "val op_PlusPlus";
@@ -199,4 +177,4 @@ let actual3 = [|("generic parameter a", "a", "file1", ((4, 18), (4, 20)), ["type
   ("int", "int", "file1", ((12, 37), (12, 40)), ["type"], ["abbrev"]);
   ("Impl", "Impl", "file1", ((2, 7), (2, 11)), ["defn"], ["module"])|]
 
-  matching expected3 actual3
+matching expected3 actual3

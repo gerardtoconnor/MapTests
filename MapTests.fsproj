@@ -6,12 +6,12 @@
     <DebugSymbols>true</DebugSymbols>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="MatrixTesting.fs"/>
     <Compile Include="SampleData.fs"/>
-    <Compile Include="UnionSets.fs" />
+    <Compile Include="UnionSets.fs"/>
     <Compile Include="ShardMap.fs"/>
+    <Compile Include="LayeredMap.fs"/>
     <Compile Include="Tests.fs"/>
-    <!-- <Compile Include="CircularQueue.fs"/> -->
-    <!-- <Compile Include="RolledMap.fs" /> -->
     <Compile Include="Program.fs"/>
   </ItemGroup>
   <ItemGroup>
@@ -19,5 +19,6 @@
     <PackageReference Include="xunit" Version="2.3.1"/>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="15.5.0"/>
     <PackageReference Include="xunit.runner.visualstudio" Version="2.3.1"/>
+    <PackageReference Include="MathNet.Numerics" Version="4.0.0-beta03"/>
   </ItemGroup>
 </Project>
